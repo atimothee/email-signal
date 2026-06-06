@@ -24,6 +24,19 @@ let sessionId = nanoid();
 let weaveReady = false;
 let weaveModule: typeof import('weave') | null = null;
 
+type TraceSubscriber = (event: AgentTraceEvent) => void;
+const subscribers = new Set<TraceSubscriber>();
+
+/**
+ * Subscribe to every recorded trace event. Returns an unsubscribe function.
+ * Used by evals to assert on the agent timeline without needing
+ * chrome.storage. Also useful for tests that pin the exact handoff order.
+ */
+export function subscribeTrace(cb: TraceSubscriber): () => void {
+  subscribers.add(cb);
+  return () => subscribers.delete(cb);
+}
+
 export async function initWeave(opts: { project?: string; apiKey?: string } = {}): Promise<void> {
   if (typeof chrome !== 'undefined') return; // skip in extension
   if (weaveReady) return;
@@ -94,6 +107,14 @@ export async function recordTrace(
   }
   // 3. Broadcast to the side panel.
   await broadcastTrace(event);
+  // 4. Fan out to in-process subscribers (used in evals/tests).
+  for (const cb of subscribers) {
+    try {
+      cb(event);
+    } catch (err) {
+      console.debug('[EmailSignal] trace subscriber failed', err);
+    }
+  }
   return event;
 }
 
