@@ -7,6 +7,11 @@ import { streamSSE } from 'hono/streaming';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import {
+  CopilotRuntime,
+  OpenAIAdapter,
+  copilotRuntimeNodeHttpEndpoint,
+} from '@copilotkit/runtime';
+import {
   ClutterFindingSchema,
   EmailCandidateSchema,
   PriorityFindingSchema,
@@ -123,6 +128,37 @@ app.post('/orchestrate/chat', async (c) => {
       await writer.send('done', { ok: false });
     }
   });
+});
+
+// ---- CopilotKit runtime ----
+// Drives the side-panel <CopilotChat>. The runtime LLM produces text replies
+// and emits tool calls for any `useCopilotAction` registered client-side
+// (cards). Approval/dry-run/kill-switch still apply because every card action
+// dispatches `panel/approve_action` etc. through the extension service worker
+// → orchestrator → policy gate.
+// Handler is built lazily on first request so a missing OPENAI_API_KEY at boot
+// doesn't crash the server.
+let copilotHandler:
+  | ReturnType<typeof copilotRuntimeNodeHttpEndpoint>
+  | null = null;
+function getCopilotHandler() {
+  if (copilotHandler) return copilotHandler;
+  copilotHandler = copilotRuntimeNodeHttpEndpoint({
+    endpoint: '/copilotkit',
+    runtime: new CopilotRuntime(),
+    serviceAdapter: new OpenAIAdapter({
+      model: process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini',
+    }),
+  });
+  return copilotHandler;
+}
+
+app.all('/copilotkit', async (c) => {
+  if (!process.env['OPENAI_API_KEY']) {
+    return c.json({ error: 'OPENAI_API_KEY not set on server' }, 500);
+  }
+  const res = await getCopilotHandler()(c.req.raw);
+  return res as Response;
 });
 
 // ---- Boot ----

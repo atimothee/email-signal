@@ -6,12 +6,15 @@ interface Props {
   children: React.ReactNode;
 }
 
-/**
- * Wraps the app in CopilotKit. We point `runtimeUrl` at the local Hono sidecar
- * (path: /copilotkit). When the sidecar isn't running CopilotKit gracefully
- * no-ops; our custom chat path (panel/chat_message via the service worker)
- * continues to work — generative-UI rendering of cards is purely client-side.
- */
+export const ORCHESTRATOR_INSTRUCTIONS = `You are the EmailSignal Orchestrator answering chat in the side panel.
+You NEVER delete, send, forward, or reply to mail. You NEVER act without explicit user approval.
+When you have findings to show, prefer rendering them through the available tools rather than plain text:
+- show_priority_email, show_clutter_sender_group, show_daily_brief_section
+- show_action_ledger, show_agent_trace
+When asking the user to act on a proposed change, call request_action_approval (single)
+or request_batch_approval (mark_read/archive only) and wait for the user's response.
+Be concise. If you don't know, say so.`;
+
 export function CopilotProvider({ children }: Props): JSX.Element {
   const [runtimeUrl, setRuntimeUrl] = useState<string>('http://localhost:3030/copilotkit');
 
@@ -26,7 +29,7 @@ export function CopilotProvider({ children }: Props): JSX.Element {
   }, []);
 
   return (
-    <CopilotKit runtimeUrl={runtimeUrl} agent="emailsignal_orchestrator">
+    <CopilotKit runtimeUrl={runtimeUrl} showDevConsole={false}>
       {children}
     </CopilotKit>
   );
