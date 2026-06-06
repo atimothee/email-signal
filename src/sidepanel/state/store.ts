@@ -38,6 +38,9 @@ interface PanelState {
 
   ingest: (msg: ExtMessage) => void;
   pushChatUser: (text: string) => void;
+  pushChatAssistant: (text: string) => void;
+  dismissMemorySuggestion: (id: string) => void;
+  removeProposedAction: (id: string) => void;
   setApiKey: (k: string) => void;
   setDryRun: (b: boolean) => void;
   setKillSwitch: (b: boolean) => void;
@@ -106,6 +109,21 @@ export const usePanelStore = create<PanelState>((set) => ({
         { id: `${Date.now()}`, role: 'user', text, at: new Date().toISOString() },
       ],
     })),
+  pushChatAssistant: (text) =>
+    set((s) => ({
+      chat: [
+        ...s.chat,
+        { id: `${Date.now()}-a`, role: 'assistant', text, at: new Date().toISOString() },
+      ],
+    })),
+  dismissMemorySuggestion: (id) =>
+    set((s) => ({ memorySuggestions: s.memorySuggestions.filter((m) => m.id !== id) })),
+  removeProposedAction: (id) =>
+    set((s) => {
+      const next = { ...s.proposedActions };
+      delete next[id];
+      return { proposedActions: next };
+    }),
   setApiKey: (k) => set({ apiKey: k }),
   setDryRun: (b) => set({ dryRun: b }),
   setKillSwitch: (b) => set({ killSwitch: b }),

@@ -136,6 +136,66 @@ onMessage(async (msg, sender) => {
         await chrome.storage.local.set({ [STORAGE_KEYS.preferences]: existing });
         return;
       }
+      case 'panel/batch_approve': {
+        for (const id of msg.proposedActionIds) {
+          await runOrchestratorTurn({
+            trigger: 'approval',
+            approval: {
+              proposedActionId: id,
+              status: 'approved',
+              approvedAt: msg.confirmedAt,
+              approvedBy: 'user',
+              note: 'batch-approved',
+            },
+          });
+        }
+        await recordTrace({
+          kind: 'approval_granted',
+          message: `batch approval: ${msg.proposedActionIds.length} action(s)`,
+          data: { proposedActionIds: msg.proposedActionIds },
+        });
+        return;
+      }
+      case 'panel/always_suggest':
+      case 'panel/never_suggest': {
+        const kindKey = msg.kind === 'panel/always_suggest' ? 'liked_newsletter' : 'ignored_sender';
+        const pref = {
+          id: `${msg.kind}:${msg.patternKey}:${Date.now()}`,
+          kind: kindKey as 'liked_newsletter' | 'ignored_sender',
+          key: msg.patternKey,
+          value: msg.kind === 'panel/always_suggest' ? 'always_suggest' : 'never_suggest',
+          source: 'agent_suggested_then_approved' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        const existing =
+          ((await chrome.storage.local.get(STORAGE_KEYS.preferences))[
+            STORAGE_KEYS.preferences
+          ] as Record<string, unknown>[]) ?? [];
+        existing.push(pref);
+        await chrome.storage.local.set({ [STORAGE_KEYS.preferences]: existing });
+        await recordTrace({
+          kind: 'approval_granted',
+          message: msg.kind,
+          data: { patternKey: msg.patternKey, proposedActionId: msg.proposedActionId },
+        });
+        return;
+      }
+      case 'panel/correct_action':
+      case 'panel/correct_finding': {
+        // Persist as a structured correction the orchestrator can pick up next turn.
+        const correctionsKey = 'emailsignal_corrections';
+        const existing =
+          ((await chrome.storage.local.get(correctionsKey))[correctionsKey] as unknown[]) ?? [];
+        existing.push({ ...msg, at: new Date().toISOString() });
+        await chrome.storage.local.set({ [correctionsKey]: existing });
+        await recordTrace({
+          kind: 'approval_rejected',
+          message: 'user correction',
+          data: { kind: msg.kind, text: msg.correction },
+        });
+        return;
+      }
       default:
         // Background-originated messages echoing back from another surface; ignore.
         return;
