@@ -18,17 +18,13 @@ interface SectionHeadingProps {
 
 function SectionHeading({ label, count, tone = 'accent', action }: SectionHeadingProps): JSX.Element {
   return (
-    <div className="section-label" style={{ alignItems: 'center' }}>
+    <div className="section-label">
       <span>{label}</span>
       {typeof count === 'number' && count > 0 && (
         <span key={count} className={`count-badge ${tone === 'warn' ? 'warn' : ''}`}>{count}</span>
       )}
       {action && (
-        <button
-          className="ghost"
-          onClick={action.onClick}
-          style={{ marginLeft: 'auto', padding: '3px 10px', fontSize: 11.5, borderRadius: 999 }}
-        >
+        <button className="section-action" onClick={action.onClick}>
           {action.label}
         </button>
       )}
@@ -106,7 +102,7 @@ export function DailyBriefTab(): JSX.Element {
             tone="warn"
             action={
               batchEligible.length >= 2
-                ? { label: `Review ${batchEligible.length} as batch`, onClick: () => setBatchOpen(true) }
+                ? { label: `Batch ${batchEligible.length}`, onClick: () => setBatchOpen(true) }
                 : undefined
             }
           />

@@ -28,7 +28,6 @@ export function ChatTab(): JSX.Element {
 
   const chat = usePanelStore((s) => s.chat);
   const pushUser = usePanelStore((s) => s.pushChatUser);
-  const lastError = usePanelStore((s) => s.lastError);
   const [text, setText] = useState('');
   const [pending, setPending] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
@@ -67,11 +66,6 @@ export function ChatTab(): JSX.Element {
         {pending && (
           <div className="bubble assistant" aria-busy="true">
             <Skeleton lines={2} />
-          </div>
-        )}
-        {lastError && !pending && (
-          <div className="subtle" style={{ color: 'var(--danger)' }}>
-            {lastError}
           </div>
         )}
       </div>

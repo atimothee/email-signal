@@ -7,19 +7,14 @@ import { send } from '../state/bridge';
 export function ClutterTab(): JSX.Element {
   const groups = usePanelStore((s) => s.groups);
   const proposedActions = usePanelStore((s) => s.proposedActions);
-  const lastError = usePanelStore((s) => s.lastError);
 
   if (groups.length === 0) {
     return (
       <EmptyState
         title="A clean inbox"
-        body={
-          lastError
-            ? lastError
-            : "Scan your inbox and we'll group noisy senders here so you can unsubscribe in a few clicks."
-        }
+        body="Scan your inbox and we'll group noisy senders here so you can unsubscribe in a few clicks."
         action={{ label: 'Scan inbox', onClick: () => send({ kind: 'panel/request_scan' }) }}
-        hint="Unsubscribes always require per-sender confirmation."
+        hint="Every unsubscribe needs a per-sender confirmation."
       />
     );
   }
