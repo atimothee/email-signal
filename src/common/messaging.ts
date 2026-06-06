@@ -33,10 +33,12 @@ export async function sendToActiveTab(msg: ExtMessage): Promise<void> {
   }
 }
 
-export async function sendToTab(tabId: number, msg: ExtMessage): Promise<void> {
+export async function sendToTab(tabId: number, msg: ExtMessage): Promise<boolean> {
   try {
     await chrome.tabs.sendMessage(tabId, msg);
+    return true;
   } catch (err) {
     console.debug('[EmailSignal] sendToTab swallow', err);
+    return false;
   }
 }

@@ -91,8 +91,22 @@ onMessage(async (msg, sender) => {
           });
           return;
         }
+        let delivered = 0;
         for (const t of tabs) {
-          if (t.id) await sendToTab(t.id, { kind: 'bg/request_scan', source: 'inbox' });
+          if (t.id && (await sendToTab(t.id, { kind: 'bg/request_scan', source: 'inbox' }))) {
+            delivered++;
+          }
+        }
+        if (delivered === 0) {
+          await broadcastToPanel({
+            kind: 'bg/error',
+            message:
+              "Couldn't reach Gmail. Reload the Gmail tab (Cmd+R on mail.google.com) and try Scan again.",
+          });
+          await recordTrace({
+            kind: 'error',
+            message: 'Gmail tab found but content script unreachable',
+          });
         }
         return;
       }
