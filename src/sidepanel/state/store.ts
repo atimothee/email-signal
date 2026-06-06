@@ -12,13 +12,6 @@ import type {
   ScanResult,
 } from '@schemas/index';
 
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-  at: string;
-}
-
 interface PanelState {
   apiKey: string;
   dryRun: boolean;
@@ -33,12 +26,9 @@ interface PanelState {
   ledger: ActionLedgerEntry[];
   memorySuggestions: MemorySuggestion[];
   traceEvents: AgentTraceEvent[];
-  chat: ChatMessage[];
   lastError: string | null;
 
   ingest: (msg: ExtMessage) => void;
-  pushChatUser: (text: string) => void;
-  pushChatAssistant: (text: string) => void;
   dismissMemorySuggestion: (id: string) => void;
   removeProposedAction: (id: string) => void;
   setApiKey: (k: string) => void;
@@ -59,7 +49,6 @@ export const usePanelStore = create<PanelState>((set) => ({
   ledger: [],
   memorySuggestions: [],
   traceEvents: [],
-  chat: [],
   lastError: null,
   ingest: (msg) =>
     set((s) => {
@@ -90,32 +79,14 @@ export const usePanelStore = create<PanelState>((set) => ({
         case 'bg/trace_event':
           return { traceEvents: [...s.traceEvents, msg.event].slice(-300) };
         case 'bg/chat_reply':
-          return {
-            chat: [
-              ...s.chat,
-              { id: `${Date.now()}`, role: 'assistant', text: msg.text, at: new Date().toISOString() },
-            ],
-          };
+          // Legacy reply path; CopilotKit renders chat now. Ignored.
+          return {};
         case 'bg/error':
           return { lastError: msg.message };
         default:
           return {};
       }
     }),
-  pushChatUser: (text) =>
-    set((s) => ({
-      chat: [
-        ...s.chat,
-        { id: `${Date.now()}`, role: 'user', text, at: new Date().toISOString() },
-      ],
-    })),
-  pushChatAssistant: (text) =>
-    set((s) => ({
-      chat: [
-        ...s.chat,
-        { id: `${Date.now()}-a`, role: 'assistant', text, at: new Date().toISOString() },
-      ],
-    })),
   dismissMemorySuggestion: (id) =>
     set((s) => ({ memorySuggestions: s.memorySuggestions.filter((m) => m.id !== id) })),
   removeProposedAction: (id) =>
