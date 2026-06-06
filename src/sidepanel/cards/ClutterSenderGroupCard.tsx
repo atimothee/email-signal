@@ -50,8 +50,7 @@ export function ClutterSenderGroupCard({
       <div className="rationale">{group.rationale}</div>
 
       <WhyShown
-        reason={`Grouped because ${group.count} messages from ${group.senderDomain} matched the ${group.category.replace(/_/g, ' ')} pattern.`}
-        evidence={`Average confidence ${(group.averageConfidence * 100).toFixed(0)}%.`}
+        reason={`${group.count} messages from ${group.senderDomain} matched the ${group.category.replace(/_/g, ' ')} pattern.`}
       />
 
       {confirming && canUnsub && (

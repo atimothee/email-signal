@@ -42,8 +42,7 @@ export function EmailPriorityCard({ finding, onHighlight, onPropose, onCorrect }
       {finding.ask && <div className="rationale">Ask: <em>{finding.ask}</em></div>}
 
       <WhyShown
-        reason={`Classified as ${prettyCategory(finding.category)} with ${finding.urgency} urgency.`}
-        evidence={finding.dueAt ? `Due date detected in the body.` : undefined}
+        reason={`Classified as ${prettyCategory(finding.category)} with ${finding.urgency} urgency${finding.dueAt ? ' — due date detected.' : '.'}`}
       />
 
       <div className="actions">

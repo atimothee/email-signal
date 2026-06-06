@@ -51,14 +51,7 @@ export function ApprovalActionCard({
 
   return (
     <article className={`card accent ${leaving ? 'leaving' : ''}`} aria-live="polite">
-      <div className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <h3>{action.title}</h3>
-          <div className="meta">
-            Proposed by <strong>{humanize(action.proposedBy)}</strong>
-          </div>
-        </div>
-      </div>
+      <h3>{action.title}</h3>
 
       <div className="badge-row">
         <RiskBadge risk={action.risk} />
@@ -79,15 +72,12 @@ export function ApprovalActionCard({
 
       {isUnsubscribe && (
         <p className="subtle" style={{ marginTop: 8 }}>
-          You will land on the sender's unsubscribe page and confirm there. EmailSignal
-          never clicks the final unsubscribe button for you.
+          You'll confirm the unsubscribe on the sender's page — we never click it for you.
         </p>
       )}
 
-      <WhyShown
-        reason={why}
-        evidence={action.emailId ? `Email reference: ${action.emailId}` : undefined}
-      />
+      <WhyShown reason={why} />
+
 
       <div className="approval-actions">
         <button className="primary" onClick={() => dispatch(onApprove)}>
@@ -104,19 +94,19 @@ export function ApprovalActionCard({
         <div className="secondary-row">
           {onAlwaysSuggest && (
             <button
-              title="Keep proposing suggestions like this — I still want to approve every time."
+              title="Keep suggesting this — I'll still approve each one."
               onClick={onAlwaysSuggest}
             >
-              Always suggest this (no auto-act)
+              Keep suggesting
             </button>
           )}
           {onNeverSuggest && (
             <button
               className="danger-soft"
-              title="Never propose this kind of suggestion again."
+              title="Stop suggesting this kind of thing."
               onClick={onNeverSuggest}
             >
-              Never suggest this again
+              Stop suggesting
             </button>
           )}
         </div>
@@ -131,33 +121,29 @@ export function ApprovalActionCard({
   );
 }
 
-function humanize(s: string): string {
-  return s.replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 function defaultEffect(action: ProposedAction): string {
   switch (action.type) {
     case 'click_unsubscribe':
-      return 'Open the sender\'s unsubscribe page in a new tab. You confirm there.';
+      return "Opens the sender's unsubscribe page in a new tab.";
     case 'mark_read':
-      return 'Mark this message as read in Gmail. Reversible from the action history.';
+      return 'Marks this as read. Undo from History.';
     case 'archive':
-      return 'Move this message out of the inbox into All Mail. Reversible.';
+      return 'Archives this out of the inbox. Undo from History.';
     case 'apply_label':
-      return `Apply the label "${action.params['labelName'] ?? 'EmailSignal'}".`;
+      return `Adds the label "${action.params['labelName'] ?? 'EmailSignal'}".`;
     case 'suggest_label':
-      return 'Suggest a label only — nothing is applied until you choose.';
+      return 'Suggests a label — nothing is applied until you pick.';
     case 'remember_preference':
-      return 'Save this as a learned preference. Editable from Settings.';
+      return 'Saves a preference. Editable in Settings.';
     case 'highlight_element':
-      return 'Highlight this in the Gmail tab so you can find it visually.';
+      return 'Highlights this in Gmail.';
     case 'scroll_to_element':
-      return 'Scroll the Gmail tab to this email.';
+      return 'Scrolls Gmail to this email.';
     case 'open_email':
-      return 'Open this email in Gmail.';
+      return 'Opens this email in Gmail.';
     case 'find_unsubscribe_link':
-      return 'Locate the unsubscribe link without clicking it.';
+      return 'Finds the unsubscribe link without clicking it.';
     default:
-      return 'Carry out the action shown above.';
+      return 'Carries out the action above.';
   }
 }

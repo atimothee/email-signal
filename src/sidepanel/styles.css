@@ -411,6 +411,24 @@ button.icon.spinning svg { animation: spin 800ms var(--ease-out); }
 }
 .count-badge.warn { background: var(--warn-soft); color: var(--warn); }
 
+.section-action {
+  margin-left: auto;
+  background: var(--accent-softer);
+  color: var(--accent-strong);
+  border: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.section-action:hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  transform: none;
+}
+
 .brief-headline {
   font-size: 17px;
   font-weight: 600;
@@ -701,33 +719,27 @@ code {
 }
 .error-message { flex: 1; min-width: 0; }
 
-/* Why-am-I-seeing-this disclosure */
+/* Why-am-I-seeing-this — reads as quiet metadata, not an action */
 .why { margin-top: 8px; }
 .why-trigger {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: transparent;
-  border: 1px dashed var(--border-strong);
+  background: var(--surface-2);
+  border: none;
   color: var(--text-faint);
-  padding: 3px 9px;
+  padding: 2px 9px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 500;
 }
 .why-trigger:hover {
-  background: var(--surface-2);
-  color: var(--text-dim);
-  border-color: var(--accent-soft);
+  background: var(--accent-softer);
+  color: var(--accent-strong);
   transform: none;
 }
-.why-trigger svg { color: var(--text-faint); }
-.why.open .why-trigger {
-  background: var(--accent-softer);
-  border-color: var(--accent-soft);
-  border-style: solid;
-  color: var(--accent-strong);
-}
+.why-trigger svg { color: currentColor; }
+.why.open .why-trigger { background: var(--accent-softer); color: var(--accent-strong); }
 .why-body {
   margin-top: 6px;
   padding: 8px 10px;
@@ -740,22 +752,22 @@ code {
   animation: fade-swap 220ms var(--ease-out);
 }
 
-/* Correct-this inline form */
-.correct { margin-top: 0; }
+/* Correct-this — same quiet chip language */
+.correct { margin-top: 0; display: inline-block; }
 .correct-trigger {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: transparent;
+  background: var(--surface-2);
   border: none;
   color: var(--text-faint);
-  font-size: 11.5px;
-  padding: 4px 8px;
+  font-size: 11px;
+  padding: 2px 9px;
   border-radius: 999px;
 }
 .correct-trigger:hover {
-  background: var(--surface-2);
-  color: var(--text-dim);
+  background: var(--accent-softer);
+  color: var(--accent-strong);
   transform: none;
 }
 .correct-form {
@@ -830,22 +842,14 @@ code {
   background: var(--danger-soft);
 }
 
-/* Batch review panel */
-.batch-panel {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 14px 12px;
-  margin-bottom: 10px;
-}
-.batch-panel h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
-.batch-panel .batch-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+/* Batch review panel — layers onto .card.accent for the soft tinted background */
 .batch-list {
   max-height: 280px;
   overflow: auto;
-  margin: 8px 0 4px;
+  margin: 10px 0 4px;
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
 }
 .batch-row {
   display: grid;

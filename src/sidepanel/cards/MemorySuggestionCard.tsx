@@ -41,10 +41,7 @@ export function MemorySuggestionCard({
         </div>
       </div>
 
-      <WhyShown
-        reason="Pattern noticed across recent interactions."
-        evidence={`Source: ${suggestion.proposedRecord.source.replace(/_/g, ' ')}`}
-      />
+      <WhyShown reason="Pattern noticed across recent interactions." />
 
       <div className="actions">
         <button className="primary" onClick={() => dispatch(onApprove)}>

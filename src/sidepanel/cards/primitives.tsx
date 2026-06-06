@@ -131,11 +131,9 @@ export function ReversibilityBadge({ reversible }: ReversibilityBadgeProps): JSX
 interface WhyShownProps {
   /** Plain language: which signal triggered this suggestion. */
   reason: string;
-  /** Optional secondary line (e.g. matched preference, matched pattern). */
-  evidence?: string;
 }
 
-export function WhyShown({ reason, evidence }: WhyShownProps): JSX.Element {
+export function WhyShown({ reason }: WhyShownProps): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
     <div className={`why ${open ? 'open' : ''}`}>
@@ -150,12 +148,7 @@ export function WhyShown({ reason, evidence }: WhyShownProps): JSX.Element {
         </svg>
         Why am I seeing this?
       </button>
-      {open && (
-        <div className="why-body">
-          <div>{reason}</div>
-          {evidence && <div className="faint" style={{ marginTop: 4 }}>{evidence}</div>}
-        </div>
-      )}
+      {open && <div className="why-body">{reason}</div>}
     </div>
   );
 }
@@ -165,7 +158,7 @@ interface CorrectThisProps {
   label?: string;
 }
 
-export function CorrectThis({ onSubmit, label = 'Correct this' }: CorrectThisProps): JSX.Element {
+export function CorrectThis({ onSubmit, label = 'Not right?' }: CorrectThisProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   const [done, setDone] = useState(false);
