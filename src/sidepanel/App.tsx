@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useExtensionBridge, send } from './state/bridge';
 import { usePanelStore } from './state/store';
 import { DailyBriefTab } from './tabs/DailyBriefTab';
@@ -34,6 +34,15 @@ export function App(): JSX.Element {
     send({ kind: 'panel/request_scan' });
     setTimeout(() => setScanSpin(false), 900);
   };
+
+  useEffect(() => {
+    if (overlay === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOverlay(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [overlay]);
 
   return (
     <div className="app">
@@ -153,10 +162,15 @@ function OverlayWrapper({ title, onClose, children }: OverlayWrapperProps): JSX.
   return (
     <div>
       <div className="overlay-header">
-        <h2 className="overlay-title">{title}</h2>
-        <button className="ghost" onClick={onClose} aria-label="Close">
-          Done
+        <button className="overlay-back" onClick={onClose} aria-label="Back">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 3 5 8l5 5" />
+          </svg>
+          {title}
         </button>
+        <span className="overlay-hint">
+          <kbd>Esc</kbd> to close
+        </span>
       </div>
       {children}
     </div>
