@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "EmailSignal",
+  "version": "0.1.0",
+  "description": "Multi-agent Gmail assistant with explicit human-in-the-loop approvals. Reads visible Gmail DOM. Never deletes or sends mail.",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "EmailSignal",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["src/content/index.ts"],
+      "css": ["src/content/highlight.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "sidePanel",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "http://localhost:3030/*",
+    "http://127.0.0.1:3030/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
