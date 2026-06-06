@@ -37,21 +37,16 @@ export function BatchActionReviewPanel({ actions, onConfirm, onCancel }: Props):
   const summary = summarize(eligible.filter((a) => selected[a.id]));
 
   return (
-    <section className="batch-panel" aria-labelledby="batch-title">
-      <h3 id="batch-title">Review batch action</h3>
-      <div className="batch-meta">
-        Batch approval is available only for low-risk reversible actions (mark as read,
-        archive). One confirmation runs the whole batch.
+    <article className="card accent batch-panel" aria-labelledby="batch-title">
+      <h3 id="batch-title">Review as a batch</h3>
+      <div className="meta">
+        Only reversible mark-as-read and archive can be batched. One tap runs them all.
       </div>
 
       {ineligible.length > 0 && (
-        <div className="error-state" style={{ background: 'var(--warn-soft)', borderColor: 'rgba(255,186,86,0.3)' }}>
-          <div className="error-icon" style={{ background: 'var(--warn)' }}>!</div>
-          <div className="error-message">
-            {ineligible.length} action{ineligible.length === 1 ? '' : 's'} cannot be batched
-            (higher risk or not reversible). Approve each individually below.
-          </div>
-        </div>
+        <p className="subtle" style={{ marginTop: 8 }}>
+          {ineligible.length} can't be batched (higher risk or not reversible). Approve those one by one.
+        </p>
       )}
 
       {eligible.length === 0 ? (
@@ -123,7 +118,7 @@ export function BatchActionReviewPanel({ actions, onConfirm, onCancel }: Props):
           Cancel
         </button>
       </div>
-    </section>
+    </article>
   );
 }
 
