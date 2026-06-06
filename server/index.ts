@@ -1,0 +1,139 @@
+/// <reference types="node" />
+import 'dotenv/config';
+import { serve } from '@hono/node-server';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { streamSSE } from 'hono/streaming';
+import { nanoid } from 'nanoid';
+import { z } from 'zod';
+import {
+  ClutterFindingSchema,
+  EmailCandidateSchema,
+  PriorityFindingSchema,
+} from '../src/schemas/index.js';
+import { runAgentClassification, runAgentChat, initServerWeave } from './agents.js';
+import type { SseWriter } from './trace-bridge.js';
+
+const PORT = Number(process.env['EMAIL_SIGNAL_PORT'] ?? 3030);
+
+const app = new Hono();
+
+// CORS: allow any chrome-extension://... origin. In production tighten this to
+// the specific extension ID.
+app.use(
+  '*',
+  cors({
+    origin: (origin) => origin ?? '*',
+    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 600,
+  })
+);
+
+// ---- Health ----
+app.get('/health', (c) =>
+  c.json({
+    ok: true,
+    name: 'emailsignal-server',
+    version: '0.1.0',
+    hasOpenAIKey: !!process.env['OPENAI_API_KEY'],
+    hasWeaveKey: !!process.env['WANDB_API_KEY'],
+    weaveProject: process.env['WANDB_PROJECT'] ?? null,
+  })
+);
+
+const ClassifyBody = z.object({
+  turnId: z.string().optional(),
+  candidates: z.array(EmailCandidateSchema).min(1).max(200),
+});
+
+// ---- Classify (SSE) ----
+// Body: { turnId, candidates }
+// Stream events:
+//   event: trace        data: AgentTraceEvent JSON
+//   event: classification data: { clutter: [...], priorities: [...] }
+//   event: error        data: { message }
+//   event: done         data: { ok: true }
+app.post('/orchestrate/classify', async (c) => {
+  const json = await c.req.json().catch(() => null);
+  const parsed = ClassifyBody.safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
+  }
+  const { turnId = nanoid(), candidates } = parsed.data;
+
+  return streamSSE(c, async (stream) => {
+    const writer: SseWriter = {
+      send: async (event, data) => {
+        await stream.writeSSE({ event, data: JSON.stringify(data) });
+      },
+    };
+    try {
+      const result = await runAgentClassification({ turnId, candidates, writer });
+      await writer.send('classification', {
+        clutter: result.clutter,
+        priorities: result.priorities,
+      });
+      await writer.send('done', { ok: true });
+    } catch (err) {
+      const message = (err as Error).message ?? 'unknown error';
+      await writer.send('error', { message });
+      await writer.send('done', { ok: false });
+    }
+  });
+});
+
+const ChatBody = z.object({
+  turnId: z.string().optional(),
+  message: z.string().min(1).max(8000),
+  /** Optional recent ledger/preferences context the client gives the server. */
+  context: z
+    .object({
+      recentClutter: z.array(ClutterFindingSchema).max(50).optional(),
+      recentPriorities: z.array(PriorityFindingSchema).max(50).optional(),
+    })
+    .optional(),
+});
+
+// ---- Chat (SSE) ----
+// Body: { turnId, message, context? }
+// Stream events:
+//   event: trace        data: AgentTraceEvent JSON
+//   event: chat_reply   data: { text }
+//   event: error / done
+app.post('/orchestrate/chat', async (c) => {
+  const json = await c.req.json().catch(() => null);
+  const parsed = ChatBody.safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
+  }
+  const { turnId = nanoid(), message, context } = parsed.data;
+  return streamSSE(c, async (stream) => {
+    const writer: SseWriter = {
+      send: async (event, data) => {
+        await stream.writeSSE({ event, data: JSON.stringify(data) });
+      },
+    };
+    try {
+      const text = await runAgentChat({ turnId, message, context, writer });
+      await writer.send('chat_reply', { text });
+      await writer.send('done', { ok: true });
+    } catch (err) {
+      await writer.send('error', { message: (err as Error).message });
+      await writer.send('done', { ok: false });
+    }
+  });
+});
+
+// ---- Boot ----
+void initServerWeave().catch((err) =>
+  console.warn('[emailsignal-server] weave init failed', err)
+);
+
+serve({ fetch: app.fetch, port: PORT }, (info) => {
+  // eslint-disable-next-line no-console
+  console.log(`[emailsignal-server] listening on http://localhost:${info.port}`);
+  if (!process.env['OPENAI_API_KEY']) {
+    console.warn('[emailsignal-server] OPENAI_API_KEY is not set; LLM endpoints will fail.');
+  }
+});
