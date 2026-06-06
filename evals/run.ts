@@ -2,6 +2,7 @@ import { runClutterEval } from './clutter.eval.js';
 import { runPriorityEval } from './priority.eval.js';
 import { runSafetyEval } from './safety.eval.js';
 import { runMemoryEval } from './memory.eval.js';
+import { runHandoffsEval } from './handoffs.eval.js';
 
 interface Result { name: string; passed: number; total: number; failures: string[] }
 
@@ -11,6 +12,7 @@ async function main() {
   results.push({ name: 'priority', ...(await runPriorityEval()) });
   results.push({ name: 'safety', ...(await runSafetyEval()) });
   results.push({ name: 'memory', ...(await runMemoryEval()) });
+  results.push({ name: 'handoffs', ...(await runHandoffsEval()) });
 
   let okAll = true;
   for (const r of results) {

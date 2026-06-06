@@ -16,7 +16,8 @@
     "eval:clutter": "tsx evals/clutter.eval.ts",
     "eval:priority": "tsx evals/priority.eval.ts",
     "eval:safety": "tsx evals/safety.eval.ts",
-    "eval:memory": "tsx evals/memory.eval.ts"
+    "eval:memory": "tsx evals/memory.eval.ts",
+    "eval:handoffs": "tsx evals/handoffs.eval.ts"
   },
   "dependencies": {
     "@copilotkit/react-core": "^1.10.0",
