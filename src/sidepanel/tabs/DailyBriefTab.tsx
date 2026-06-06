@@ -6,6 +6,23 @@ import { MemorySuggestionCard } from '../cards/MemorySuggestionCard';
 import { EmailPriorityCard } from '../cards/EmailPriorityCard';
 import { send } from '../state/bridge';
 
+interface SectionHeadingProps {
+  label: string;
+  count?: number;
+  tone?: 'accent' | 'warn';
+}
+
+function SectionHeading({ label, count, tone = 'accent' }: SectionHeadingProps): JSX.Element {
+  return (
+    <div className="section-label">
+      <span>{label}</span>
+      {typeof count === 'number' && count > 0 && (
+        <span key={count} className={`count-badge ${tone === 'warn' ? 'warn' : ''}`}>{count}</span>
+      )}
+    </div>
+  );
+}
+
 export function DailyBriefTab(): JSX.Element {
   const brief = usePanelStore((s) => s.brief);
   const priorities = usePanelStore((s) => s.priorities);
@@ -14,11 +31,34 @@ export function DailyBriefTab(): JSX.Element {
   );
   const memorySuggestions = usePanelStore((s) => s.memorySuggestions);
 
+  const isEmpty = !brief && priorities.length === 0 && pending.length === 0 && memorySuggestions.length === 0;
+
+  if (isEmpty) {
+    return (
+      <div className="empty">
+        <div className="empty-orb" />
+        <div className="empty-title">Ready when you are</div>
+        <div>Open Gmail in another tab, then scan your inbox.</div>
+        <div style={{ marginTop: 16 }}>
+          <button
+            className="primary"
+            onClick={() => send({ kind: 'panel/request_scan' })}
+          >
+            Scan inbox
+          </button>
+        </div>
+        <div className="empty-hint">
+          Nothing happens without your approval — you'll see every action here first.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       {pending.length > 0 && (
         <>
-          <h2 style={{ fontSize: 13, margin: '0 0 8px' }}>Awaiting your approval</h2>
+          <SectionHeading label="Decide now" count={pending.length} tone="warn" />
           {pending.map((a) => (
             <ApprovalActionCard
               key={a.id}
@@ -48,7 +88,7 @@ export function DailyBriefTab(): JSX.Element {
 
       {memorySuggestions.length > 0 && (
         <>
-          <h2 style={{ fontSize: 13, margin: '14px 0 8px' }}>Memory suggestions</h2>
+          <SectionHeading label="Should I remember this?" count={memorySuggestions.length} />
           {memorySuggestions.map((s) => (
             <MemorySuggestionCard
               key={s.id}
@@ -72,36 +112,23 @@ export function DailyBriefTab(): JSX.Element {
 
       {brief ? (
         <>
-          <h1 style={{ fontSize: 16, margin: '14px 0 4px' }}>{brief.headline}</h1>
-          <div className="subtle">
+          <SectionHeading label="Today's brief" />
+          <div className="brief-headline">{brief.headline}</div>
+          <div className="faint" style={{ marginBottom: 8 }}>
             Generated {new Date(brief.generatedAt).toLocaleString()}
           </div>
           {brief.sections.map((s) => (
             <DailyBriefSection key={s.kind} section={s} />
           ))}
         </>
-      ) : (
+      ) : priorities.length > 0 ? (
         <>
-          <div className="empty">
-            No brief yet — open Gmail in another tab, then click <em>↻ Scan now</em>, then
-            <button
-              className="primary"
-              style={{ marginLeft: 6 }}
-              onClick={() => send({ kind: 'panel/request_brief' })}
-            >
-              Generate brief
-            </button>
-          </div>
-          {priorities.length > 0 && (
-            <>
-              <h2 style={{ fontSize: 13, margin: '14px 0 8px' }}>Priority emails</h2>
-              {priorities.map((p) => (
-                <EmailPriorityCard key={p.emailId} finding={p} />
-              ))}
-            </>
-          )}
+          <SectionHeading label="Priorities" count={priorities.length} />
+          {priorities.map((p) => (
+            <EmailPriorityCard key={p.emailId} finding={p} />
+          ))}
         </>
-      )}
+      ) : null}
     </div>
   );
 }
