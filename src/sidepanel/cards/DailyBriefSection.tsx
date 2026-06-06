@@ -10,10 +10,8 @@ interface Props {
 export function DailyBriefSection({ section }: Props): JSX.Element {
   return (
     <section style={{ marginBottom: 16 }}>
-      <h2 style={{ fontSize: 13, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.06, margin: '14px 0 6px' }}>
-        {section.title}
-      </h2>
-      {section.summary && <p className="subtle">{section.summary}</p>}
+      <div className="section-label">{section.title}</div>
+      {section.summary && <p className="subtle" style={{ marginTop: 0, marginBottom: 8 }}>{section.summary}</p>}
       {section.items.map((item) => (
         <EmailPriorityCard key={item.emailId} finding={item} />
       ))}

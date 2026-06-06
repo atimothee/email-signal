@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useExtensionBridge } from './state/bridge';
+import { useExtensionBridge, send } from './state/bridge';
 import { usePanelStore } from './state/store';
 import { DailyBriefTab } from './tabs/DailyBriefTab';
 import { ClutterTab } from './tabs/ClutterTab';
@@ -7,68 +7,158 @@ import { LedgerTab } from './tabs/LedgerTab';
 import { ChatTab } from './tabs/ChatTab';
 import { SettingsTab } from './tabs/SettingsTab';
 import { AgentActivityPanel } from './cockpit/AgentActivityPanel';
-import { send } from './state/bridge';
 
-type TabId = 'brief' | 'clutter' | 'ledger' | 'chat' | 'settings';
+type TabId = 'today' | 'cleanup' | 'chat';
+type Overlay = null | 'history' | 'settings';
+
+const TABS: ReadonlyArray<[TabId, string]> = [
+  ['today', 'Today'],
+  ['cleanup', 'Cleanup'],
+  ['chat', 'Chat'],
+];
 
 export function App(): JSX.Element {
   useExtensionBridge();
-  const [tab, setTab] = useState<TabId>('brief');
+  const [tab, setTab] = useState<TabId>('today');
+  const [overlay, setOverlay] = useState<Overlay>(null);
+  const [scanSpin, setScanSpin] = useState(false);
   const killSwitch = usePanelStore((s) => s.killSwitch);
   const dryRun = usePanelStore((s) => s.dryRun);
   const lastError = usePanelStore((s) => s.lastError);
 
+  const statusTone = killSwitch ? 'critical' : dryRun ? 'warn' : '';
+  const statusLabel = killSwitch ? 'Kill switch' : dryRun ? 'Dry run' : 'Live';
+
+  const handleScan = () => {
+    setScanSpin(true);
+    send({ kind: 'panel/request_scan' });
+    setTimeout(() => setScanSpin(false), 900);
+  };
+
   return (
     <div className="app">
       <header className="brand">
-        <div>
-          <h1>EmailSignal</h1>
-          <div className="meta">
-            {killSwitch ? (
-              <span className="pill critical">KILL SWITCH</span>
-            ) : dryRun ? (
-              <span className="pill warn">DRY RUN</span>
-            ) : (
-              <span className="pill success">LIVE</span>
-            )}
-            {' '}<span className="subtle">multi-agent · human-in-the-loop</span>
-          </div>
+        <div className="brand-left">
+          <h1 className="wordmark">EmailSignal</h1>
+          <span className={`status-chip ${statusTone}`}>
+            <span className="dot" />
+            {statusLabel}
+          </span>
         </div>
-        <button className="ghost" onClick={() => send({ kind: 'panel/request_scan' })}>
-          ↻ Scan now
-        </button>
+        <div className="brand-actions">
+          <IconButton
+            label="Scan now"
+            spinning={scanSpin}
+            onClick={handleScan}
+            icon={
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+                <path d="M13.5 2.5v3h-3" />
+              </svg>
+            }
+          />
+          <IconButton
+            label="History"
+            active={overlay === 'history'}
+            onClick={() => setOverlay(overlay === 'history' ? null : 'history')}
+            icon={
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 4v4l2.5 1.5" />
+                <circle cx="8" cy="8" r="6" />
+              </svg>
+            }
+          />
+          <IconButton
+            label="Settings"
+            active={overlay === 'settings'}
+            onClick={() => setOverlay(overlay === 'settings' ? null : 'settings')}
+            icon={
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8" cy="8" r="2" />
+                <path d="M13 8c0 .4 0 .8-.1 1.2l1.4 1.1-1.4 2.4-1.7-.6c-.6.5-1.3.9-2 1.1L9 15H7l-.2-1.8a5 5 0 0 1-2-1.1l-1.7.6-1.4-2.4 1.4-1.1a5 5 0 0 1 0-2.4L1.7 5.7l1.4-2.4 1.7.6a5 5 0 0 1 2-1.1L7 1h2l.2 1.8c.7.2 1.4.6 2 1.1l1.7-.6 1.4 2.4-1.4 1.1c.1.4.1.8.1 1.2Z" />
+              </svg>
+            }
+          />
+        </div>
       </header>
 
-      <nav className="tabs" role="tablist">
-        {[
-          ['brief', 'Daily Brief'],
-          ['clutter', 'Clutter'],
-          ['ledger', 'Actions'],
-          ['chat', 'Chat'],
-          ['settings', 'Settings'],
-        ].map(([id, label]) => (
-          <button
-            key={id}
-            className={tab === id ? 'active' : ''}
-            onClick={() => setTab(id as TabId)}
-            role="tab"
-            aria-selected={tab === id}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      <AgentActivityPanel />
+
+      {overlay === null && (
+        <nav className="tabs" role="tablist">
+          {TABS.map(([id, label]) => (
+            <button
+              key={id}
+              className={tab === id ? 'active' : ''}
+              onClick={() => setTab(id)}
+              role="tab"
+              aria-selected={tab === id}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+      )}
 
       <main className="panel">
-        {lastError && <div className="danger-banner">⚠ {lastError}</div>}
-        {tab === 'brief' && <DailyBriefTab />}
-        {tab === 'clutter' && <ClutterTab />}
-        {tab === 'ledger' && <LedgerTab />}
-        {tab === 'chat' && <ChatTab />}
-        {tab === 'settings' && <SettingsTab />}
+        {lastError && <div className="danger-banner">{lastError}</div>}
+        {overlay === 'history' ? (
+          <OverlayWrapper title="Action history" onClose={() => setOverlay(null)}>
+            <LedgerTab />
+          </OverlayWrapper>
+        ) : overlay === 'settings' ? (
+          <OverlayWrapper title="Settings" onClose={() => setOverlay(null)}>
+            <SettingsTab />
+          </OverlayWrapper>
+        ) : (
+          <>
+            {tab === 'today' && <DailyBriefTab />}
+            {tab === 'cleanup' && <ClutterTab />}
+            {tab === 'chat' && <ChatTab />}
+          </>
+        )}
       </main>
+    </div>
+  );
+}
 
-      <AgentActivityPanel />
+interface IconButtonProps {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  spinning?: boolean;
+  onClick: () => void;
+}
+
+function IconButton({ icon, label, active, spinning, onClick }: IconButtonProps): JSX.Element {
+  return (
+    <button
+      className={`icon ${active ? 'active' : ''} ${spinning ? 'spinning' : ''}`}
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+    >
+      {icon}
+    </button>
+  );
+}
+
+interface OverlayWrapperProps {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}
+
+function OverlayWrapper({ title, onClose, children }: OverlayWrapperProps): JSX.Element {
+  return (
+    <div>
+      <div className="overlay-header">
+        <h2 className="overlay-title">{title}</h2>
+        <button className="ghost" onClick={onClose} aria-label="Close">
+          Done
+        </button>
+      </div>
+      {children}
     </div>
   );
 }

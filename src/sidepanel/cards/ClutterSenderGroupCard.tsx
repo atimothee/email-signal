@@ -35,7 +35,7 @@ export function ClutterSenderGroupCard({
       <div className="actions">
         {group.suggestedActions.includes('unsubscribe') && onUnsubscribe && (
           <button className="primary" onClick={onUnsubscribe}>
-            Queue unsubscribe
+            Unsubscribe
           </button>
         )}
         {onMarkRead && <button onClick={onMarkRead}>Mark all read</button>}

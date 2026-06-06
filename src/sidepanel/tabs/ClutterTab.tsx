@@ -10,17 +10,24 @@ export function ClutterTab(): JSX.Element {
   if (groups.length === 0) {
     return (
       <div className="empty">
-        No clutter detected yet. Scan an inbox first — we'll group senders and queue
-        unsubscribe actions for your approval.
+        <div className="empty-orb" />
+        <div className="empty-title">A clean inbox</div>
+        <div>Scan your inbox and we'll group noisy senders here so you can unsubscribe in a few clicks.</div>
+        <div style={{ marginTop: 16 }}>
+          <button className="primary" onClick={() => send({ kind: 'panel/request_scan' })}>
+            Scan inbox
+          </button>
+        </div>
       </div>
     );
   }
+
+  const totalMessages = groups.reduce((acc, g) => acc + g.count, 0);
+
   return (
     <>
-      <div className="subtle" style={{ marginBottom: 10 }}>
-        {groups.length} sender group{groups.length > 1 ? 's' : ''} ·{' '}
-        {groups.reduce((acc, g) => acc + g.count, 0)} clutter message
-        {groups.reduce((acc, g) => acc + g.count, 0) > 1 ? 's' : ''}
+      <div className="subtle" style={{ marginTop: 4, marginBottom: 12 }}>
+        {groups.length} noisy sender{groups.length === 1 ? '' : 's'} · {totalMessages} message{totalMessages === 1 ? '' : 's'}
       </div>
       {groups.map((g) => {
         const queued = Object.values(proposedActions).some(

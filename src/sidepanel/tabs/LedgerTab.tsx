@@ -6,10 +6,8 @@ export function LedgerTab(): JSX.Element {
   const ledger = usePanelStore((s) => s.ledger);
   return (
     <>
-      <div className="subtle" style={{ marginBottom: 10 }}>
-        Permanent audit trail of every proposed and executed action. Nothing gets executed
-        without your explicit approval, and the ledger captures who proposed it, when you
-        approved, and what happened.
+      <div className="subtle" style={{ marginBottom: 12 }}>
+        Every action — proposed, approved, executed — is logged here.
       </div>
       <ActionLedgerTable entries={ledger} />
     </>
