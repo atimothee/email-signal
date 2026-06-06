@@ -1,0 +1,10 @@
+.es-highlight {
+  outline: 3px solid #ff7a59 !important;
+  outline-offset: 2px !important;
+  border-radius: 4px !important;
+  transition: outline-color 200ms ease;
+  scroll-margin-top: 100px;
+}
+.es-highlight-fade {
+  outline-color: rgba(255, 122, 89, 0.4) !important;
+}
