@@ -1,20 +1,20 @@
 :root {
   /* Blue-cobalt palette */
   --bg: #0a0e1a;
-  --surface: #131a2c;
-  --surface-2: #1c2540;
-  --surface-3: #283358;
-  --border: rgba(255, 255, 255, 0.06);
-  --border-strong: rgba(255, 255, 255, 0.12);
-  --text: #eef1f8;
-  --text-dim: #94a0b8;
-  --text-faint: #6b7691;
+  --surface: #1a2236;
+  --surface-2: #232d44;
+  --surface-3: #2e3a55;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: #f3f5fa;
+  --text-dim: #a8b4cc;
+  --text-faint: #7886a1;
 
-  --accent: #6090ff;
-  --accent-strong: #83a8ff;
-  --accent-glow: #4c7cff;
-  --accent-soft: rgba(96, 144, 255, 0.16);
-  --accent-softer: rgba(96, 144, 255, 0.07);
+  --accent: #4d9eff;
+  --accent-strong: #7ab6ff;
+  --accent-glow: #3e8fff;
+  --accent-soft: rgba(77, 158, 255, 0.20);
+  --accent-softer: rgba(77, 158, 255, 0.10);
 
   --success: #5ed6a3;
   --success-soft: rgba(94, 214, 163, 0.15);
@@ -55,7 +55,7 @@ body::before {
   inset: -40% -40% auto auto;
   width: 80vmax;
   height: 80vmax;
-  background: radial-gradient(circle at 30% 30%, rgba(96, 144, 255, 0.12), transparent 55%);
+  background: radial-gradient(circle at 30% 30%, rgba(77, 158, 255, 0.14), transparent 55%);
   pointer-events: none;
   animation: drift 22s ease-in-out infinite;
   z-index: 0;
@@ -66,7 +66,7 @@ body::after {
   inset: auto auto -40% -30%;
   width: 70vmax;
   height: 70vmax;
-  background: radial-gradient(circle at 60% 60%, rgba(96, 144, 255, 0.06), transparent 55%);
+  background: radial-gradient(circle at 60% 60%, rgba(77, 158, 255, 0.08), transparent 55%);
   pointer-events: none;
   animation: drift 28s ease-in-out infinite reverse;
   z-index: 0;
@@ -132,7 +132,11 @@ button.icon {
   height: 32px;
 }
 button.icon:hover { background: var(--surface-2); color: var(--text); transform: none; }
-button.icon.active { background: var(--accent-soft); color: var(--accent-strong); }
+button.icon.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px var(--accent-soft);
+}
 button.icon.spinning svg { animation: spin 800ms var(--ease-out); }
 
 .app {
@@ -201,7 +205,7 @@ button.icon.spinning svg { animation: spin 800ms var(--ease-out); }
 .pulse:hover { border-color: var(--border-strong); }
 .pulse.working {
   border-color: var(--accent-soft);
-  background: linear-gradient(135deg, var(--surface) 0%, rgba(96, 144, 255, 0.08) 100%);
+  background: linear-gradient(135deg, var(--surface) 0%, rgba(77, 158, 255, 0.12) 100%);
 }
 .pulse.working::before {
   content: '';
@@ -209,7 +213,7 @@ button.icon.spinning svg { animation: spin 800ms var(--ease-out); }
   inset: 0;
   background: linear-gradient(90deg,
     transparent 0%,
-    rgba(96, 144, 255, 0.10) 50%,
+    rgba(77, 158, 255, 0.14) 50%,
     transparent 100%);
   background-size: 200% 100%;
   animation: shimmer 3.2s linear infinite;
@@ -605,14 +609,43 @@ tbody tr { animation: fade-swap 280ms var(--ease-out); }
 .overlay-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   padding: 0 0 12px;
+  margin-left: -8px;
 }
-.overlay-title {
+.overlay-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text);
   font-size: 15px;
   font-weight: 600;
-  margin: 0;
-  flex: 1;
+  padding: 6px 10px 6px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+.overlay-back:hover { background: var(--surface); transform: none; }
+.overlay-back:hover svg { color: var(--accent-strong); transform: translateX(-2px); }
+.overlay-back svg {
+  color: var(--text-dim);
+  transition: transform 160ms var(--ease-out), color 140ms var(--ease-out);
+}
+.overlay-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.overlay-hint kbd {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, 'Menlo', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
 }
 
 /* Code */
