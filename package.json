@@ -1,0 +1,52 @@
+{
+  "name": "email-signal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EmailSignal — multi-agent Gmail assistant Chrome extension with explicit human-in-the-loop approvals.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch --config vite.config.ts",
+    "build": "tsc --noEmit && vite build --config vite.config.ts",
+    "build:sidepanel": "vite build --config vite.sidepanel.config.ts",
+    "build:all": "npm run build && npm run build:sidepanel",
+    "typecheck": "tsc --noEmit",
+    "server": "tsx watch server/index.ts",
+    "server:once": "tsx server/index.ts",
+    "evals": "tsx evals/run.ts",
+    "eval:clutter": "tsx evals/clutter.eval.ts",
+    "eval:priority": "tsx evals/priority.eval.ts",
+    "eval:safety": "tsx evals/safety.eval.ts",
+    "eval:memory": "tsx evals/memory.eval.ts"
+  },
+  "dependencies": {
+    "@copilotkit/react-core": "^1.10.0",
+    "@copilotkit/react-ui": "^1.10.0",
+    "@hono/node-server": "^2.0.4",
+    "@openai/agents": "^0.0.14",
+    "@openai/agents-core": "0.0.14",
+    "eventsource-parser": "^3.1.0",
+    "hono": "^4.12.23",
+    "ioredis": "^5.4.1",
+    "nanoid": "^5.0.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "weave": "^0.7.0",
+    "zod": "^3.23.8",
+    "zustand": "^4.5.4"
+  },
+  "overrides": {
+    "@openai/agents-core": "0.0.14"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.25",
+    "@types/chrome": "^0.0.270",
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "dotenv": "^16.4.5",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3",
+    "vite": "^5.3.3"
+  }
+}
