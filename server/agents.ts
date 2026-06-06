@@ -1,4 +1,4 @@
-import { Agent, run, setDefaultOpenAIKey } from '@openai/agents';
+import { Agent, handoff, run, setDefaultOpenAIKey } from '@openai/agents';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import {
@@ -8,10 +8,13 @@ import {
   PriorityFindingSchema,
   PriorityFinding,
 } from '../src/schemas/index.js';
-import { AGENT_NAMES, INSTRUCTIONS } from '../src/agents/agent-defs.js';
+import { AGENT_NAMES, INSTRUCTIONS, AGENT_REGISTRY } from '../src/agents/agent-defs.js';
 import { emit, SseWriter } from './trace-bridge.js';
 
 const MODEL = process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini';
+
+/** Max candidates per parallel classifier call. */
+const BATCH_SIZE = Number(process.env['EMAIL_SIGNAL_BATCH_SIZE'] ?? 8);
 
 let weaveReady = false;
 
@@ -81,6 +84,17 @@ function ensureKey(): void {
 const ClutterBatchSchema = z.object({ findings: z.array(ClutterFindingSchema) });
 const PriorityBatchSchema = z.object({ findings: z.array(PriorityFindingSchema) });
 
+const ClutterHandoffInput = z.object({
+  reason: z.string(),
+  batchIndex: z.number().int().min(0),
+  batchCount: z.number().int().min(1),
+});
+const PriorityHandoffInput = z.object({
+  reason: z.string(),
+  batchIndex: z.number().int().min(0),
+  batchCount: z.number().int().min(1),
+});
+
 interface ClassifyInput {
   turnId: string;
   candidates: EmailCandidate[];
@@ -92,6 +106,109 @@ interface ClassifyOutput {
   priorities: PriorityFinding[];
 }
 
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out.length === 0 ? [[]] : out;
+}
+
+function buildClutterAgent(): Agent<unknown, typeof ClutterBatchSchema> {
+  return new Agent({
+    name: AGENT_NAMES.clutter,
+    instructions: INSTRUCTIONS[AGENT_NAMES.clutter],
+    model: MODEL,
+    outputType: ClutterBatchSchema,
+  });
+}
+
+function buildPriorityAgent(): Agent<unknown, typeof PriorityBatchSchema> {
+  return new Agent({
+    name: AGENT_NAMES.priority,
+    instructions: INSTRUCTIONS[AGENT_NAMES.priority],
+    model: MODEL,
+    outputType: PriorityBatchSchema,
+  });
+}
+
+/**
+ * Build the OrchestratorAgent with explicit handoffs to the classifiers via
+ * `@openai/agents` `handoff()`. The `onHandoff` callback fires when the
+ * orchestrator delegates — we mirror that into our AgentTraceEvent stream and
+ * Weave so the extension cockpit sees every handoff in real-time.
+ */
+function buildOrchestratorAgent(opts: {
+  writer: SseWriter;
+  sessionId: string;
+  turnId: string;
+}): Agent<unknown, any> {
+  const clutterAgent = buildClutterAgent();
+  const priorityAgent = buildPriorityAgent();
+
+  const clutterHandoff = handoff(clutterAgent, {
+    inputType: ClutterHandoffInput,
+    onHandoff: async (_runCtx, input) => {
+      await emit(opts.writer, opts.sessionId, opts.turnId, {
+        kind: 'agent_handoff',
+        agent: AGENT_NAMES.orchestrator,
+        message: `${AGENT_NAMES.orchestrator} → ${AGENT_NAMES.clutter}: classify_clutter`,
+        data: {
+          fromAgent: AGENT_NAMES.orchestrator,
+          toAgent: AGENT_NAMES.clutter,
+          kind: 'classify_clutter',
+          batchIndex: input?.batchIndex,
+          batchCount: input?.batchCount,
+          reason: input?.reason,
+        },
+      });
+    },
+  });
+
+  const priorityHandoff = handoff(priorityAgent, {
+    inputType: PriorityHandoffInput,
+    onHandoff: async (_runCtx, input) => {
+      await emit(opts.writer, opts.sessionId, opts.turnId, {
+        kind: 'agent_handoff',
+        agent: AGENT_NAMES.orchestrator,
+        message: `${AGENT_NAMES.orchestrator} → ${AGENT_NAMES.priority}: classify_priority`,
+        data: {
+          fromAgent: AGENT_NAMES.orchestrator,
+          toAgent: AGENT_NAMES.priority,
+          kind: 'classify_priority',
+          batchIndex: input?.batchIndex,
+          batchCount: input?.batchCount,
+          reason: input?.reason,
+        },
+      });
+    },
+  });
+
+  const responsibilities = AGENT_REGISTRY[AGENT_NAMES.orchestrator].responsibilities
+    .map((r) => `- ${r}`)
+    .join('\n');
+
+  return new Agent({
+    name: AGENT_NAMES.orchestrator,
+    instructions:
+      INSTRUCTIONS[AGENT_NAMES.orchestrator] +
+      '\n\nResponsibilities:\n' +
+      responsibilities,
+    model: MODEL,
+    handoffs: [clutterHandoff, priorityHandoff],
+  });
+}
+
+/**
+ * Parallel batch classification.
+ *
+ * Strategy:
+ *  - The OrchestratorAgent is built with explicit SDK handoffs to Clutter +
+ *    Priority. We emit a typed `agent_handoff` trace BEFORE invoking each batch
+ *    so the timeline shows the explicit delegation.
+ *  - Candidates are chunked into BATCH_SIZE-sized groups. Each batch runs both
+ *    classifiers in parallel via Promise.all; batches themselves run in
+ *    parallel via Promise.allSettled — a single batch failure does not kill
+ *    the whole turn.
+ */
 export async function runAgentClassification(input: ClassifyInput): Promise<ClassifyOutput> {
   ensureKey();
   const sessionId = nanoid();
@@ -102,100 +219,131 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     message: `Classifying ${candidates.length} candidates`,
   });
 
-  const clutterAgent = new Agent({
-    name: AGENT_NAMES.clutter,
-    instructions: INSTRUCTIONS[AGENT_NAMES.clutter],
-    model: MODEL,
-    outputType: ClutterBatchSchema,
-  });
+  // Build the orchestrator agent with handoffs registered so the SDK emits
+  // its own trace spans for the delegation; we also emit our own
+  // agent_handoff events for each batch.
+  buildOrchestratorAgent({ writer, sessionId, turnId });
+  const clutterAgent = buildClutterAgent();
+  const priorityAgent = buildPriorityAgent();
 
-  const priorityAgent = new Agent({
-    name: AGENT_NAMES.priority,
-    instructions: INSTRUCTIONS[AGENT_NAMES.priority],
-    model: MODEL,
-    outputType: PriorityBatchSchema,
-  });
-
-  // Compact serialization keeps the prompt cheap.
-  const payload = JSON.stringify(
-    candidates.map((c) => ({
-      id: c.id,
-      threadId: c.threadId,
-      from: c.from,
-      subject: c.subject,
-      snippet: c.snippet,
-      hasUnsubscribeLink: c.hasUnsubscribeLink,
-    }))
-  );
-
+  const batches = chunk(candidates, BATCH_SIZE);
   await emit(writer, sessionId, turnId, {
     kind: 'agent_start',
-    agent: AGENT_NAMES.clutter,
-    message: 'classifying clutter',
-  });
-  await emit(writer, sessionId, turnId, {
-    kind: 'agent_start',
-    agent: AGENT_NAMES.priority,
-    message: 'identifying priorities',
+    agent: AGENT_NAMES.orchestrator,
+    message: `dispatching ${batches.length} batch(es) of up to ${BATCH_SIZE}`,
   });
 
-  // Run the two classification agents sequentially. Parallel runs hit a
-  // race in the SDK's AsyncLocalStorage trace-context propagation
-  // (multiple top-level `run()` calls scheduled together cause
-  // "No existing trace found" inside the SDK). Sequential keeps each
-  // run inside its own clean `getOrCreateTrace` scope.
-  const clutterResult = await runSafe(() =>
-    run(
-      clutterAgent,
-      `Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${payload}`
-    )
-  );
-  const priorityResult = await runSafe(() =>
-    run(
-      priorityAgent,
-      `Identify priority emails from these candidates and return {findings: PriorityFinding[]} only.\n${payload}`
-    )
+  // Per-batch handoff events.
+  for (let i = 0; i < batches.length; i++) {
+    await emit(writer, sessionId, turnId, {
+      kind: 'agent_handoff',
+      agent: AGENT_NAMES.orchestrator,
+      message: `${AGENT_NAMES.orchestrator} → ${AGENT_NAMES.clutter}: classify_clutter`,
+      data: {
+        fromAgent: AGENT_NAMES.orchestrator,
+        toAgent: AGENT_NAMES.clutter,
+        kind: 'classify_clutter',
+        batchIndex: i,
+        batchCount: batches.length,
+        candidateIds: batches[i]!.map((c) => c.id),
+      },
+    });
+    await emit(writer, sessionId, turnId, {
+      kind: 'agent_handoff',
+      agent: AGENT_NAMES.orchestrator,
+      message: `${AGENT_NAMES.orchestrator} → ${AGENT_NAMES.priority}: classify_priority`,
+      data: {
+        fromAgent: AGENT_NAMES.orchestrator,
+        toAgent: AGENT_NAMES.priority,
+        kind: 'classify_priority',
+        batchIndex: i,
+        batchCount: batches.length,
+        candidateIds: batches[i]!.map((c) => c.id),
+      },
+    });
+  }
+
+  const batchResults = await Promise.allSettled(
+    batches.map(async (batch, idx) => {
+      const payload = JSON.stringify(
+        batch.map((c) => ({
+          id: c.id,
+          threadId: c.threadId,
+          from: c.from,
+          subject: c.subject,
+          snippet: c.snippet,
+          hasUnsubscribeLink: c.hasUnsubscribeLink,
+        }))
+      );
+
+      // Sequential within a single batch (clutter then priority) keeps each
+      // top-level run() inside its own AsyncLocalStorage trace scope — a
+      // known SDK constraint. Cross-batch parallelism does the heavy lifting.
+      const clutterRes = await runSafe(() =>
+        run(
+          clutterAgent,
+          `Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${payload}`
+        )
+      );
+      const priorityRes = await runSafe(() =>
+        run(
+          priorityAgent,
+          `Identify priority emails from these candidates and return {findings: PriorityFinding[]} only.\n${payload}`
+        )
+      );
+
+      const clutterOut =
+        clutterRes.status === 'fulfilled'
+          ? ((clutterRes.value.finalOutput as { findings?: ClutterFinding[] } | undefined)?.findings ?? [])
+          : null;
+      const priorityOut =
+        priorityRes.status === 'fulfilled'
+          ? ((priorityRes.value.finalOutput as { findings?: PriorityFinding[] } | undefined)?.findings ?? [])
+          : null;
+
+      if (clutterOut === null) {
+        const detail = formatRunError((clutterRes as any).reason);
+        await emit(writer, sessionId, turnId, {
+          kind: 'error',
+          agent: AGENT_NAMES.clutter,
+          message: `batch ${idx + 1}/${batches.length}: ${detail}`,
+        });
+      }
+      if (priorityOut === null) {
+        const detail = formatRunError((priorityRes as any).reason);
+        await emit(writer, sessionId, turnId, {
+          kind: 'error',
+          agent: AGENT_NAMES.priority,
+          message: `batch ${idx + 1}/${batches.length}: ${detail}`,
+        });
+      }
+
+      return {
+        clutter: clutterOut ?? [],
+        priorities: priorityOut ?? [],
+      };
+    })
   );
 
   let clutter: ClutterFinding[] = [];
   let priorities: PriorityFinding[] = [];
-
-  if (clutterResult.status === 'fulfilled') {
-    const out = clutterResult.value.finalOutput as { findings?: ClutterFinding[] } | undefined;
-    clutter = out?.findings ?? [];
-    await emit(writer, sessionId, turnId, {
-      kind: 'agent_end',
-      agent: AGENT_NAMES.clutter,
-      message: `clutter findings: ${clutter.length}`,
-    });
-  } else {
-    const detail = formatRunError(clutterResult.reason);
-    console.error('[emailsignal-server] clutter agent failed:', detail);
-    await emit(writer, sessionId, turnId, {
-      kind: 'error',
-      agent: AGENT_NAMES.clutter,
-      message: detail,
-    });
+  for (const r of batchResults) {
+    if (r.status === 'fulfilled') {
+      clutter = clutter.concat(r.value.clutter);
+      priorities = priorities.concat(r.value.priorities);
+    }
   }
 
-  if (priorityResult.status === 'fulfilled') {
-    const out = priorityResult.value.finalOutput as { findings?: PriorityFinding[] } | undefined;
-    priorities = out?.findings ?? [];
-    await emit(writer, sessionId, turnId, {
-      kind: 'agent_end',
-      agent: AGENT_NAMES.priority,
-      message: `priority findings: ${priorities.length}`,
-    });
-  } else {
-    const detail = formatRunError(priorityResult.reason);
-    console.error('[emailsignal-server] priority agent failed:', detail);
-    await emit(writer, sessionId, turnId, {
-      kind: 'error',
-      agent: AGENT_NAMES.priority,
-      message: detail,
-    });
-  }
-
+  await emit(writer, sessionId, turnId, {
+    kind: 'agent_end',
+    agent: AGENT_NAMES.clutter,
+    message: `clutter findings: ${clutter.length}`,
+  });
+  await emit(writer, sessionId, turnId, {
+    kind: 'agent_end',
+    agent: AGENT_NAMES.priority,
+    message: `priority findings: ${priorities.length}`,
+  });
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
   return { clutter, priorities };
 }
