@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { usePanelStore } from '../state/store';
 import { AgentTraceTimeline } from '../cards/AgentTraceTimeline';
-import type { AgentTraceEvent } from '@schemas/index';
+import type { ActionLedgerEntry, AgentTraceEvent, ProposedAction } from '@schemas/index';
 
 const ACTIVE_KINDS = new Set<AgentTraceEvent['kind']>([
   'session_start',
@@ -27,10 +27,59 @@ function humanizeTool(tool?: string): string {
   return tool.replace(/[_-]/g, ' ');
 }
 
-function describe(event: AgentTraceEvent | undefined): string {
+function resolveActionTitle(
+  event: AgentTraceEvent,
+  proposedActions: Record<string, ProposedAction>,
+  ledger: ActionLedgerEntry[],
+): string | undefined {
+  const id =
+    (event.data?.['proposedActionId'] as string | undefined) ??
+    (event.data?.['actionId'] as string | undefined);
+  if (!id) return undefined;
+  const proposed = proposedActions[id];
+  if (proposed?.title) return proposed.title;
+  const entry = ledger.find((e) => e.proposed.id === id);
+  return entry?.proposed.title;
+}
+
+function describe(
+  event: AgentTraceEvent | undefined,
+  proposedActions: Record<string, ProposedAction>,
+  ledger: ActionLedgerEntry[],
+  dryRun: boolean,
+): string {
   if (!event) return 'Ready when you are';
-  if (event.message) return event.message;
+
   const who = humanizeAgent(event.agent);
+
+  // Action-shaped events deserve a real description ("Done: Unsubscribe from Substack").
+  switch (event.kind) {
+    case 'action_executed': {
+      const title = resolveActionTitle(event, proposedActions, ledger);
+      if (title) return dryRun || event.message === 'dry-run skip' ? `Logged (dry run): ${title}` : `Done: ${title}`;
+      return dryRun ? 'Logged action (dry run)' : 'Action executed';
+    }
+    case 'approval_granted': {
+      const title = resolveActionTitle(event, proposedActions, ledger);
+      return title ? `Approved: ${title}` : 'Approved';
+    }
+    case 'approval_rejected': {
+      const title = resolveActionTitle(event, proposedActions, ledger);
+      return title ? `Rejected: ${title}` : 'Rejected';
+    }
+    case 'action_blocked': {
+      const title = resolveActionTitle(event, proposedActions, ledger);
+      const reason = event.message ? ` — ${event.message}` : '';
+      return title ? `Blocked: ${title}${reason}` : `Action blocked${reason}`;
+    }
+    case 'approval_requested': {
+      const title = resolveActionTitle(event, proposedActions, ledger);
+      return title ? `Needs approval: ${title}` : 'Waiting for your approval';
+    }
+  }
+
+  if (event.message) return event.message;
+
   switch (event.kind) {
     case 'session_start':
       return 'Starting up…';
@@ -52,16 +101,6 @@ function describe(event: AgentTraceEvent | undefined): string {
       return event.tool ? `${humanizeTool(event.tool)} done` : 'Tool done';
     case 'classification_batch':
       return 'Classifying your messages…';
-    case 'approval_requested':
-      return 'Waiting for your approval';
-    case 'approval_granted':
-      return 'Approved';
-    case 'approval_rejected':
-      return 'Rejected';
-    case 'action_executed':
-      return 'Action executed';
-    case 'action_blocked':
-      return 'Action blocked by policy';
     case 'error':
       return 'Something went wrong';
     default:
@@ -80,6 +119,9 @@ function relativeTime(iso: string, nowMs: number): string {
 
 export function AgentActivityPanel(): JSX.Element {
   const events = usePanelStore((s) => s.traceEvents);
+  const proposedActions = usePanelStore((s) => s.proposedActions);
+  const ledger = usePanelStore((s) => s.ledger);
+  const dryRun = usePanelStore((s) => s.dryRun);
   const [open, setOpen] = useState(false);
   // tick every few seconds so "X ago" stays fresh and the active state can decay.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -99,7 +141,7 @@ export function AgentActivityPanel(): JSX.Element {
     else if (isFresh && ACTIVE_KINDS.has(latest.kind)) state = 'working';
   }
 
-  const message = describe(latest);
+  const message = describe(latest, proposedActions, ledger, dryRun);
   const sub =
     !latest ? 'Click scan to get started'
     : state === 'working' ? 'Working in the background'
