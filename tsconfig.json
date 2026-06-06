@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false,
+    "types": ["chrome", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@schemas/*": ["src/schemas/*"],
+      "@agents/*": ["src/agents/*"],
+      "@tools/*": ["src/tools/*"]
+    }
+  },
+  "include": ["src/**/*", "evals/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
