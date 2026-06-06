@@ -3,7 +3,7 @@ import { usePanelStore } from '../state/store';
 import { DailyBriefSection } from '../cards/DailyBriefSection';
 import { ApprovalActionCard } from '../cards/ApprovalActionCard';
 import { MemorySuggestionCard } from '../cards/MemorySuggestionCard';
-import { EmailPriorityCard } from '../cards/EmailPriorityCard';
+import { ActionItemCard } from '../cards/ActionItemCard';
 import { BatchActionReviewPanel } from '../cards/BatchActionReviewPanel';
 import { EmptyState } from '../cards/primitives';
 import { send } from '../state/bridge';
@@ -51,7 +51,11 @@ function isBatchable(a: ProposedAction): boolean {
 
 export function DailyBriefTab(): JSX.Element {
   const brief = usePanelStore((s) => s.brief);
-  const priorities = usePanelStore((s) => s.priorities);
+  const actionItems = usePanelStore((s) => s.actionItems);
+  const snoozedIds = usePanelStore((s) => s.snoozedActionItemIds);
+  const doneIds = usePanelStore((s) => s.doneActionItemIds);
+  const snoozeActionItem = usePanelStore((s) => s.snoozeActionItem);
+  const markActionItemDone = usePanelStore((s) => s.markActionItemDone);
   const pending = usePanelStore((s) =>
     Object.values(s.proposedActions).filter((a) => a.approvalStatus === 'pending')
   );
@@ -61,9 +65,17 @@ export function DailyBriefTab(): JSX.Element {
 
   const [batchOpen, setBatchOpen] = useState(false);
 
+  const hiddenIds = new Set([...snoozedIds, ...doneIds]);
+  const visibleItems = actionItems.filter((i) => !hiddenIds.has(i.id));
+  const highConfidenceCount = visibleItems.filter((i) => i.confidence >= 0.7).length;
+  const showItems = highConfidenceCount >= 2;
+
   const batchEligible = pending.filter(isBatchable);
   const isEmpty =
-    !brief && priorities.length === 0 && pending.length === 0 && memorySuggestions.length === 0;
+    !brief &&
+    actionItems.length === 0 &&
+    pending.length === 0 &&
+    memorySuggestions.length === 0;
 
   if (isEmpty) {
     return (
@@ -195,7 +207,38 @@ export function DailyBriefTab(): JSX.Element {
         </>
       )}
 
-      {brief ? (
+      <SectionHeading label="What needs you today" count={showItems ? visibleItems.length : 0} />
+      {showItems ? (
+        visibleItems.map((item) => (
+          <ActionItemCard
+            key={item.id}
+            item={item}
+            onSnooze={() => snoozeActionItem(item.id)}
+            onMarkDone={() => markActionItemDone(item.id)}
+            onOpenThread={(src) => {
+              if (src.threadId) {
+                send({ kind: 'bg/highlight', selector: `[data-thread-id="${src.threadId}"]` });
+              }
+            }}
+            onProposeReply={(src) =>
+              send({
+                kind: 'panel/correct_finding',
+                findingId: src.emailId,
+                surface: 'priority',
+                correction: 'propose_reply',
+              })
+            }
+          />
+        ))
+      ) : (
+        <EmptyState
+          title="Nothing pressing today"
+          body="No high-confidence action items. Re-scan to refresh."
+          hint="EmailSignal won't pad the list to look busy."
+        />
+      )}
+
+      {brief && (
         <>
           <SectionHeading label="Today's brief" />
           <div className="brief-headline">{brief.headline}</div>
@@ -225,25 +268,7 @@ export function DailyBriefTab(): JSX.Element {
             />
           ))}
         </>
-      ) : priorities.length > 0 ? (
-        <>
-          <SectionHeading label="Priorities" count={priorities.length} />
-          {priorities.map((p) => (
-            <EmailPriorityCard
-              key={p.emailId}
-              finding={p}
-              onCorrect={(text) =>
-                send({
-                  kind: 'panel/correct_finding',
-                  findingId: p.emailId,
-                  surface: 'priority',
-                  correction: text,
-                })
-              }
-            />
-          ))}
-        </>
-      ) : null}
+      )}
     </div>
   );
 }

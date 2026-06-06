@@ -2,6 +2,8 @@ import { Agent, handoff, run, setDefaultOpenAIKey } from '@openai/agents';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import {
+  ActionItem,
+  ActionItemSchema,
   ClutterFindingSchema,
   EmailCandidate,
   ClutterFinding,
@@ -10,6 +12,7 @@ import {
 } from '../src/schemas/index.js';
 import { AGENT_NAMES, INSTRUCTIONS, AGENT_REGISTRY } from '../src/agents/agent-defs.js';
 import { emit, SseWriter } from './trace-bridge.js';
+import { synthesizeActionItemsLocal, sortActionItems } from '../src/agents/synthesis.js';
 
 const MODEL = process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini';
 
@@ -397,4 +400,124 @@ export async function runAgentChat(input: ChatInput): Promise<string> {
   });
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
   return text;
+}
+
+// ── Action-item synthesis ──────────────────────────────────────────────
+//
+// Runs AFTER classification. The agent gets the classified priorities (already
+// filtered for clutter) plus the bodies the user actually saw, and emits a
+// short list of decisions. Falls back to the local synthesizer when the LLM
+// produces nothing usable.
+
+const ActionItemBatchSchema = z.object({ items: z.array(ActionItemSchema) });
+
+const SYNTHESIS_INSTRUCTIONS = `You are EmailSignal's Synthesis agent. You take a batch of
+already-classified priority findings (with bodies) and emit at most 8 ActionItems
+representing the SHORT LIST of decisions the user must make today.
+
+Rules:
+- Skip anything flagged as clutter (already filtered before you see it).
+- Cluster threads asking for the same decision into ONE item. Example: two
+  recruiter threads waiting on a reply collapse into one item naming both
+  senders.
+- Write each "action" in second-person imperative, verb-led, ≤ 100 characters.
+  Examples: "Pay Verizon $72.34 by Friday", "RSVP to Sarah's dinner Thu",
+  "Reply to Stripe recruiter — they're holding a slot".
+- Write each "why" as ONE sentence ≤ 200 characters. Concrete: amounts,
+  deadlines, the specific ask. No filler.
+- Pick suggested actions from: snooze, mark_done, open_thread, propose_reply.
+- Set theme when obvious: money, awaiting_reply, calendar, career, travel, family.
+- "sources" MUST be non-empty. Use the emailId/threadId from the input findings.
+- Prefer fewer, higher-confidence items. Do NOT pad.
+- Never invent emails that aren't in the input.
+
+Return {items: ActionItem[]}.`;
+
+interface SynthesisInput {
+  turnId: string;
+  priorities: PriorityFinding[];
+  clutter: ClutterFinding[];
+  candidates: Array<{
+    id: string;
+    threadId: string;
+    from: { name?: string; email: string };
+    subject: string;
+    snippet: string;
+    bodyExcerpt: string;
+  }>;
+  writer: SseWriter;
+}
+
+export async function runAgentSynthesis(input: SynthesisInput): Promise<ActionItem[]> {
+  ensureKey();
+  const sessionId = nanoid();
+  const { turnId, priorities, clutter, candidates, writer } = input;
+
+  await emit(writer, sessionId, turnId, {
+    kind: 'session_start',
+    message: `Synthesizing ${priorities.length} priorities`,
+  });
+  await emit(writer, sessionId, turnId, {
+    kind: 'agent_start',
+    agent: AGENT_NAMES.priority,
+    message: 'synthesize_action_items',
+  });
+
+  const clutterIds = new Set(clutter.map((c) => c.emailId));
+  const usefulPriorities = priorities.filter((p) => !clutterIds.has(p.emailId));
+
+  const local = sortActionItems(
+    synthesizeActionItemsLocal({
+      priorities: usefulPriorities,
+      clutter,
+      candidates: candidates as unknown as EmailCandidate[],
+    })
+  );
+  if (usefulPriorities.length === 0) {
+    await emit(writer, sessionId, turnId, { kind: 'session_end' });
+    return [];
+  }
+
+  const bodiesById = new Map(candidates.map((c) => [c.id, c]));
+  const enriched = usefulPriorities.map((p) => ({
+    finding: p,
+    body: bodiesById.get(p.emailId)?.bodyExcerpt ?? '',
+  }));
+
+  const synthAgent = new Agent({
+    name: 'SynthesisAgent',
+    instructions: SYNTHESIS_INSTRUCTIONS,
+    model: MODEL,
+    outputType: ActionItemBatchSchema,
+  });
+
+  let items: ActionItem[] = [];
+  try {
+    const result = await run(
+      synthAgent,
+      `Findings:\n${JSON.stringify(enriched).slice(0, 12000)}\n\nReturn {items: ActionItem[]} only.`
+    );
+    const out = (result.finalOutput as { items?: ActionItem[] } | undefined)?.items ?? [];
+    for (const it of out) {
+      const r = ActionItemSchema.safeParse(it);
+      if (r.success) items.push(r.data);
+    }
+  } catch (err) {
+    await emit(writer, sessionId, turnId, {
+      kind: 'error',
+      agent: AGENT_NAMES.priority,
+      message: `synthesis: ${formatRunError(err)}`,
+    });
+  }
+
+  if (items.length === 0) items = local;
+  items = sortActionItems(items);
+
+  await emit(writer, sessionId, turnId, {
+    kind: 'agent_end',
+    agent: AGENT_NAMES.priority,
+    message: `synthesized ${items.length} action items`,
+  });
+  await emit(writer, sessionId, turnId, { kind: 'session_end' });
+  return items;
 }

@@ -1,0 +1,173 @@
+[
+  {
+    "name": "verizon-bill-with-amount-and-due-date",
+    "candidates": [
+      {
+        "id": "e1",
+        "threadId": "t1",
+        "provider": "gmail",
+        "from": { "name": "Verizon", "email": "billing@verizon.com" },
+        "to": [],
+        "subject": "Your bill is due Friday",
+        "snippet": "Your payment of $72.34 is due on 2026-06-12. Auto-pay is off.",
+        "bodyExcerpt": "Your payment of $72.34 is due on 2026-06-12. Auto-pay is off — $15 late fee after 06-21.",
+        "isUnread": true,
+        "isStarred": false,
+        "labels": [],
+        "hasUnsubscribeLink": false,
+        "unsubscribeLinkHrefs": [],
+        "attachmentsCount": 0,
+        "domAnchor": {}
+      }
+    ],
+    "clutter": [],
+    "assertions": {
+      "minItems": 1,
+      "verbLed": true,
+      "shortWhy": true,
+      "noClutterSources": true,
+      "hasSources": true,
+      "confidenceFloor": 0.55
+    }
+  },
+  {
+    "name": "two-recruiters-clustered-into-one-item",
+    "candidates": [
+      {
+        "id": "r1",
+        "threadId": "tr1",
+        "provider": "gmail",
+        "from": { "name": "Anika at Stripe", "email": "anika@stripe.com" },
+        "to": [],
+        "subject": "Engineering Manager role at Stripe",
+        "snippet": "I came across your profile and wanted to chat about an EM opening.",
+        "bodyExcerpt": "Quick role at Stripe. Are you free to chat Tue or Wed?",
+        "isUnread": true,
+        "isStarred": false,
+        "labels": [],
+        "hasUnsubscribeLink": false,
+        "unsubscribeLinkHrefs": [],
+        "attachmentsCount": 0,
+        "domAnchor": {}
+      },
+      {
+        "id": "r2",
+        "threadId": "tr2",
+        "provider": "gmail",
+        "from": { "name": "Devon at Anthropic", "email": "devon@anthropic.com" },
+        "to": [],
+        "subject": "Opening on the Claude infra team",
+        "snippet": "Have an engineering position to share.",
+        "bodyExcerpt": "Opening on the Claude infra team. Could you confirm if interested?",
+        "isUnread": true,
+        "isStarred": false,
+        "labels": [],
+        "hasUnsubscribeLink": false,
+        "unsubscribeLinkHrefs": [],
+        "attachmentsCount": 0,
+        "domAnchor": {}
+      }
+    ],
+    "clutter": [],
+    "assertions": {
+      "minItems": 1,
+      "maxItems": 1,
+      "verbLed": true,
+      "shortWhy": true,
+      "noClutterSources": true,
+      "hasSources": true,
+      "confidenceFloor": 0.55,
+      "expectMultipleSources": true
+    }
+  },
+  {
+    "name": "newsletter-must-never-appear",
+    "candidates": [
+      {
+        "id": "n1",
+        "threadId": "tn1",
+        "provider": "gmail",
+        "from": { "name": "Substack Reads", "email": "digest@substack.com" },
+        "to": [],
+        "subject": "🔥 limited time newsletter — payment due ideas",
+        "snippet": "Subscribe to our newsletter. Unsubscribe anytime.",
+        "bodyExcerpt": "Subscribe to our newsletter. Unsubscribe anytime. Sale 60% off.",
+        "isUnread": true,
+        "isStarred": false,
+        "labels": [],
+        "hasUnsubscribeLink": true,
+        "unsubscribeLinkHrefs": ["https://substack.com/unsub"],
+        "attachmentsCount": 0,
+        "domAnchor": {}
+      },
+      {
+        "id": "p1",
+        "threadId": "tp1",
+        "provider": "gmail",
+        "from": { "name": "AT&T Billing", "email": "billing@att.com" },
+        "to": [],
+        "subject": "Your bill is due June 15",
+        "snippet": "Your statement of $84.32 is due on 2026-06-15.",
+        "bodyExcerpt": "Your statement of $84.32 is due on 2026-06-15. Pay online to avoid late fees.",
+        "isUnread": true,
+        "isStarred": false,
+        "labels": [],
+        "hasUnsubscribeLink": false,
+        "unsubscribeLinkHrefs": [],
+        "attachmentsCount": 0,
+        "domAnchor": {}
+      }
+    ],
+    "clutter": [
+      {
+        "emailId": "n1",
+        "threadId": "tn1",
+        "senderDomain": "substack.com",
+        "senderDisplay": "Substack Reads",
+        "category": "newsletter",
+        "confidence": 0.85,
+        "rationale": "Recurring newsletter with unsubscribe link.",
+        "suggestedAction": "mark_read",
+        "hasUnsubscribeLink": true,
+        "reversible": true
+      }
+    ],
+    "assertions": {
+      "minItems": 1,
+      "verbLed": true,
+      "shortWhy": true,
+      "noClutterSources": true,
+      "hasSources": true,
+      "confidenceFloor": 0.55,
+      "excludedEmailIds": ["n1"]
+    }
+  },
+  {
+    "name": "low-signal-shows-empty",
+    "candidates": [
+      {
+        "id": "s1",
+        "threadId": "ts1",
+        "provider": "gmail",
+        "from": { "name": "Some Stranger", "email": "x@example.com" },
+        "to": [],
+        "subject": "Hello",
+        "snippet": "Just saying hi",
+        "bodyExcerpt": "Just saying hi.",
+        "isUnread": true,
+        "isStarred": false,
+        "labels": [],
+        "hasUnsubscribeLink": false,
+        "unsubscribeLinkHrefs": [],
+        "attachmentsCount": 0,
+        "domAnchor": {}
+      }
+    ],
+    "clutter": [],
+    "assertions": {
+      "minItems": 0,
+      "maxItems": 0,
+      "shouldShowEmptyState": true
+    }
+  }
+]

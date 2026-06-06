@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ScanResultSchema, EmailCandidateSchema } from './email.js';
 import { ProposedActionSchema, ApprovalRecordSchema, ActionLedgerEntrySchema } from './action.js';
 import { ClutterFindingSchema, ClutterSenderGroupSchema } from './clutter.js';
-import { PriorityFindingSchema } from './priority.js';
+import { PriorityFindingSchema, ActionItemSchema } from './priority.js';
 import { DailyBriefSchema } from './brief.js';
 import { AgentTraceEventSchema } from './trace.js';
 import { MemorySuggestionSchema, UserPreferenceSchema } from './memory.js';
@@ -74,6 +74,10 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
     clutter: z.array(ClutterFindingSchema),
     groups: z.array(ClutterSenderGroupSchema),
     priorities: z.array(PriorityFindingSchema),
+  }),
+  z.object({
+    kind: z.literal('bg/action_items'),
+    items: z.array(ActionItemSchema),
   }),
   z.object({ kind: z.literal('bg/brief'), brief: DailyBriefSchema }),
   z.object({ kind: z.literal('bg/proposed_action'), action: ProposedActionSchema }),

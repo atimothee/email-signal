@@ -17,10 +17,23 @@ export function useExtensionBridge(): void {
     chrome.runtime.onMessage.addListener(handler);
     // hydrate persisted settings
     chrome.storage.local
-      .get([STORAGE_KEYS.dryRun, STORAGE_KEYS.killSwitch])
+      .get([
+        STORAGE_KEYS.dryRun,
+        STORAGE_KEYS.killSwitch,
+        'emailsignal.actionItems.snoozed',
+        'emailsignal.actionItems.done',
+      ])
       .then((v) => {
         setDryRun(v[STORAGE_KEYS.dryRun] !== false);
         setKillSwitch(!!v[STORAGE_KEYS.killSwitch]);
+        const snoozed = (v['emailsignal.actionItems.snoozed'] as string[] | undefined) ?? [];
+        const done = (v['emailsignal.actionItems.done'] as string[] | undefined) ?? [];
+        if (snoozed.length || done.length) {
+          usePanelStore.setState({
+            snoozedActionItemIds: snoozed,
+            doneActionItemIds: done,
+          });
+        }
       });
     // wave hello so background can backfill recent ledger
     chrome.runtime.sendMessage({ kind: 'panel/hello' });

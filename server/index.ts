@@ -11,7 +11,12 @@ import {
   EmailCandidateSchema,
   PriorityFindingSchema,
 } from '../src/schemas/index.js';
-import { runAgentClassification, runAgentChat, initServerWeave } from './agents.js';
+import {
+  runAgentClassification,
+  runAgentChat,
+  runAgentSynthesis,
+  initServerWeave,
+} from './agents.js';
 import type { SseWriter } from './trace-bridge.js';
 
 const PORT = Number(process.env['EMAIL_SIGNAL_PORT'] ?? 3030);
@@ -78,6 +83,55 @@ app.post('/orchestrate/classify', async (c) => {
     } catch (err) {
       const message = (err as Error).message ?? 'unknown error';
       await writer.send('error', { message });
+      await writer.send('done', { ok: false });
+    }
+  });
+});
+
+const SynthesizeBody = z.object({
+  turnId: z.string().optional(),
+  priorities: z.array(PriorityFindingSchema).max(200),
+  clutter: z.array(ClutterFindingSchema).max(200).default([]),
+  candidates: z
+    .array(
+      z.object({
+        id: z.string(),
+        threadId: z.string(),
+        from: z.object({ name: z.string().optional(), email: z.string() }),
+        subject: z.string().default(''),
+        snippet: z.string().default(''),
+        bodyExcerpt: z.string().default(''),
+      })
+    )
+    .max(200)
+    .default([]),
+});
+
+app.post('/orchestrate/synthesize', async (c) => {
+  const json = await c.req.json().catch(() => null);
+  const parsed = SynthesizeBody.safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
+  }
+  const { turnId = nanoid(), priorities, clutter, candidates } = parsed.data;
+  return streamSSE(c, async (stream) => {
+    const writer: SseWriter = {
+      send: async (event, data) => {
+        await stream.writeSSE({ event, data: JSON.stringify(data) });
+      },
+    };
+    try {
+      const items = await runAgentSynthesis({
+        turnId,
+        priorities,
+        clutter,
+        candidates,
+        writer,
+      });
+      await writer.send('action_items', { items });
+      await writer.send('done', { ok: true });
+    } catch (err) {
+      await writer.send('error', { message: (err as Error).message });
       await writer.send('done', { ok: false });
     }
   });

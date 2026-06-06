@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  ActionItem,
   ActionLedgerEntry,
   AgentTraceEvent,
   ClutterFinding,
@@ -28,6 +29,9 @@ interface PanelState {
   clutter: ClutterFinding[];
   groups: ClutterSenderGroup[];
   priorities: PriorityFinding[];
+  actionItems: ActionItem[];
+  snoozedActionItemIds: string[];
+  doneActionItemIds: string[];
   brief: DailyBrief | null;
   proposedActions: Record<string, ProposedAction>;
   ledger: ActionLedgerEntry[];
@@ -41,9 +45,19 @@ interface PanelState {
   pushChatAssistant: (text: string) => void;
   dismissMemorySuggestion: (id: string) => void;
   removeProposedAction: (id: string) => void;
+  snoozeActionItem: (id: string) => void;
+  markActionItemDone: (id: string) => void;
   setApiKey: (k: string) => void;
   setDryRun: (b: boolean) => void;
   setKillSwitch: (b: boolean) => void;
+}
+
+const ACTION_ITEM_SNOOZE_KEY = 'emailsignal.actionItems.snoozed';
+const ACTION_ITEM_DONE_KEY = 'emailsignal.actionItems.done';
+
+function writeLocalIds(key: string, ids: string[]): void {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+  chrome.storage.local.set({ [key]: ids }).catch(() => undefined);
 }
 
 export const usePanelStore = create<PanelState>((set) => ({
@@ -54,6 +68,9 @@ export const usePanelStore = create<PanelState>((set) => ({
   clutter: [],
   groups: [],
   priorities: [],
+  actionItems: [],
+  snoozedActionItemIds: [],
+  doneActionItemIds: [],
   brief: null,
   proposedActions: {},
   ledger: [],
@@ -72,6 +89,8 @@ export const usePanelStore = create<PanelState>((set) => ({
             groups: msg.groups,
             priorities: msg.priorities,
           };
+        case 'bg/action_items':
+          return { actionItems: msg.items };
         case 'bg/brief':
           return { brief: msg.brief };
         case 'bg/proposed_action':
@@ -123,6 +142,18 @@ export const usePanelStore = create<PanelState>((set) => ({
       const next = { ...s.proposedActions };
       delete next[id];
       return { proposedActions: next };
+    }),
+  snoozeActionItem: (id) =>
+    set((s) => {
+      const next = Array.from(new Set([...s.snoozedActionItemIds, id]));
+      writeLocalIds(ACTION_ITEM_SNOOZE_KEY, next);
+      return { snoozedActionItemIds: next };
+    }),
+  markActionItemDone: (id) =>
+    set((s) => {
+      const next = Array.from(new Set([...s.doneActionItemIds, id]));
+      writeLocalIds(ACTION_ITEM_DONE_KEY, next);
+      return { doneActionItemIds: next };
     }),
   setApiKey: (k) => set({ apiKey: k }),
   setDryRun: (b) => set({ dryRun: b }),

@@ -15,6 +15,7 @@
     "evals": "tsx evals/run.ts",
     "eval:clutter": "tsx evals/clutter.eval.ts",
     "eval:priority": "tsx evals/priority.eval.ts",
+    "eval:priority_synthesis": "tsx evals/priority/synthesis.eval.ts",
     "eval:safety": "tsx evals/safety.eval.ts",
     "eval:memory": "tsx evals/memory.eval.ts",
     "eval:handoffs": "tsx evals/handoffs.eval.ts"

@@ -28,7 +28,8 @@ import {
   PolicyDecision,
   PolicyDecisionSchema,
 } from './types';
-import { runLLMOrchestrator } from './llm-runner';
+import { runLLMOrchestrator, runActionItemSynthesis } from './llm-runner';
+import { applyVisibilityFloor } from './synthesis';
 import { log } from '@/common/log';
 
 interface OrchestratorTurnInput {
@@ -145,6 +146,21 @@ async function handleScan(scan: ScanResult, ctx: AgentContext): Promise<void> {
     groups,
     priorities: filteredPriorities,
   });
+
+  // 3a) Synthesis: fold priorities into ActionItems for the Today tab.
+  try {
+    const items = await runActionItemSynthesis({
+      turnId: ctx.turnId,
+      priorities: filteredPriorities,
+      clutter,
+      candidates: scan.candidates,
+    });
+    const visible = applyVisibilityFloor(items);
+    await broadcast({ kind: 'bg/action_items', items: visible });
+  } catch (err) {
+    log.warn('action-item synthesis failed', err);
+    await broadcast({ kind: 'bg/action_items', items: [] });
+  }
 
   // 4) For every suggested unsubscribe, propose an action — but only after
   //    ActionPolicyAgent gives a verdict. The orchestrator never bypasses this.

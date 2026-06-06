@@ -1,5 +1,6 @@
 import { runClutterEval } from './clutter.eval.js';
 import { runPriorityEval } from './priority.eval.js';
+import { runPrioritySynthesisEval } from './priority/synthesis.eval.js';
 import { runSafetyEval } from './safety.eval.js';
 import { runMemoryEval } from './memory.eval.js';
 import { runHandoffsEval } from './handoffs.eval.js';
@@ -10,6 +11,7 @@ async function main() {
   const results: Result[] = [];
   results.push({ name: 'clutter', ...(await runClutterEval()) });
   results.push({ name: 'priority', ...(await runPriorityEval()) });
+  results.push({ name: 'priority-synthesis', ...(await runPrioritySynthesisEval()) });
   results.push({ name: 'safety', ...(await runSafetyEval()) });
   results.push({ name: 'memory', ...(await runMemoryEval()) });
   results.push({ name: 'handoffs', ...(await runHandoffsEval()) });

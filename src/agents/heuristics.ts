@@ -5,6 +5,7 @@ import {
   EmailCandidate,
   PriorityCategory,
   PriorityFinding,
+  PrioritySignals,
   UrgencyLevel,
 } from '@schemas/index';
 import { getSenderDomain } from '@/providers/gmail';
@@ -82,6 +83,52 @@ export function quickClutterPass(c: EmailCandidate): ClutterFinding | null {
   return null;
 }
 
+const AMOUNT_RE = /(?:USD|US\$|\$|€|£)\s?(\d{1,3}(?:[,]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i;
+const ISO_DATE_RE = /\b(20\d{2}-[01]\d-[0-3]\d)\b/;
+const MONTH_DAY_RE = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+([0-3]?\d)(?:[,]?\s*(20\d{2}))?\b/i;
+const RSVP_RE = /\b(rsvp|are you (?:able|free|coming)|can you (?:make|attend|join)|will you be able)\b/i;
+const MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11,
+};
+
+function extractSignals(c: EmailCandidate, top: { category: PriorityCategory }): PrioritySignals {
+  const hay = `${c.subject}\n${c.snippet}\n${c.bodyExcerpt}`;
+  const signals: PrioritySignals = {};
+
+  const amt = hay.match(AMOUNT_RE);
+  if (amt) {
+    signals.amount = amt[1] ?? null;
+    const sym = amt[0].trim()[0];
+    signals.amountCurrency = sym === '€' ? 'EUR' : sym === '£' ? 'GBP' : 'USD';
+  }
+
+  const iso = hay.match(ISO_DATE_RE);
+  if (iso) {
+    signals.dueAtIso = iso[1] ?? null;
+  } else {
+    const md = hay.match(MONTH_DAY_RE);
+    if (md) {
+      const monthIdx = MONTHS[md[1]!.toLowerCase()];
+      const day = Number(md[2]);
+      const year = md[3] ? Number(md[3]) : new Date().getUTCFullYear();
+      if (monthIdx !== undefined && Number.isFinite(day)) {
+        const iso2 = new Date(Date.UTC(year, monthIdx, day)).toISOString().slice(0, 10);
+        signals.dueAtIso = iso2;
+      }
+    }
+  }
+
+  if (top.category === 'scheduling' || top.category === 'family_personal') {
+    signals.rsvpAsk = RSVP_RE.test(hay);
+  }
+
+  if (top.category === 'payment_reminder' || top.category === 'bill') {
+    signals.payee = c.from.name ?? c.from.email;
+  }
+
+  return signals;
+}
+
 export function quickPriorityPass(c: EmailCandidate): PriorityFinding | null {
   const hay = `${c.subject} ${c.snippet} ${c.bodyExcerpt}`;
   const payment = score(hay, PAYMENT_KEYWORDS);
@@ -103,6 +150,7 @@ export function quickPriorityPass(c: EmailCandidate): PriorityFinding | null {
   if (picks.length === 0) return null;
   picks.sort((a, b) => b.w - a.w);
   const top = picks[0]!;
+  const signals = extractSignals(c, top);
   return {
     emailId: c.id,
     threadId: c.threadId,
@@ -115,5 +163,7 @@ export function quickPriorityPass(c: EmailCandidate): PriorityFinding | null {
     confidence: Math.min(0.9, 0.5 + top.w * 0.4),
     excerpt: c.snippet.slice(0, 400),
     ask: top.ask,
+    dueAt: signals.dueAtIso ?? undefined,
+    signals,
   };
 }
