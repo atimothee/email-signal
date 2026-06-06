@@ -36,6 +36,33 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('panel/chat_message'), text: z.string().min(1).max(4000) }),
   z.object({ kind: z.literal('panel/approve_action'), approval: ApprovalRecordSchema }),
   z.object({ kind: z.literal('panel/reject_action'), proposedActionId: z.string() }),
+  z.object({
+    kind: z.literal('panel/batch_approve'),
+    proposedActionIds: z.array(z.string()).min(1).max(200),
+    confirmedAt: z.string().datetime(),
+  }),
+  z.object({
+    kind: z.literal('panel/always_suggest'),
+    proposedActionId: z.string(),
+    /** Stable key for the suggestion pattern (e.g. sender domain or action type). */
+    patternKey: z.string(),
+  }),
+  z.object({
+    kind: z.literal('panel/never_suggest'),
+    proposedActionId: z.string(),
+    patternKey: z.string(),
+  }),
+  z.object({
+    kind: z.literal('panel/correct_action'),
+    proposedActionId: z.string(),
+    correction: z.string().min(1).max(800),
+  }),
+  z.object({
+    kind: z.literal('panel/correct_finding'),
+    findingId: z.string(),
+    surface: z.enum(['priority', 'clutter', 'brief', 'memory']),
+    correction: z.string().min(1).max(800),
+  }),
   z.object({ kind: z.literal('panel/kill_switch'), enabled: z.boolean() }),
   z.object({ kind: z.literal('panel/set_dry_run'), enabled: z.boolean() }),
   z.object({ kind: z.literal('panel/save_preference'), preference: UserPreferenceSchema }),

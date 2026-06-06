@@ -411,6 +411,24 @@ button.icon.spinning svg { animation: spin 800ms var(--ease-out); }
 }
 .count-badge.warn { background: var(--warn-soft); color: var(--warn); }
 
+.section-action {
+  margin-left: auto;
+  background: var(--accent-softer);
+  color: var(--accent-strong);
+  border: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.section-action:hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  transform: none;
+}
+
 .brief-headline {
   font-size: 17px;
   font-weight: 600;
@@ -656,6 +674,232 @@ code {
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, 'Menlo', monospace;
 }
+
+/* ── Stateful primitives ─────────────────────────────── */
+
+/* Skeletons */
+.skel {
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 40%, var(--surface-2) 80%);
+  background-size: 200% 100%;
+  border-radius: 6px;
+  height: 10px;
+  margin: 6px 0;
+  animation: shimmer 1.4s linear infinite;
+}
+.skel-title { height: 14px; width: 60%; margin-bottom: 8px; }
+.skel-meta { height: 10px; width: 38%; margin-bottom: 12px; }
+.skel-line { height: 10px; }
+.skeleton-card { padding: 14px 14px 16px; }
+
+/* Error state */
+.error-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--danger-soft);
+  border: 1px solid rgba(255, 110, 110, 0.3);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  margin-bottom: 10px;
+  animation: spring-in 280ms var(--ease-spring);
+}
+.error-icon {
+  width: 22px; height: 22px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #2b0606;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+}
+.error-message { flex: 1; min-width: 0; }
+
+/* Why-am-I-seeing-this — reads as quiet metadata, not an action */
+.why { margin-top: 8px; }
+.why-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface-2);
+  border: none;
+  color: var(--text-faint);
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.why-trigger:hover {
+  background: var(--accent-softer);
+  color: var(--accent-strong);
+  transform: none;
+}
+.why-trigger svg { color: currentColor; }
+.why.open .why-trigger { background: var(--accent-softer); color: var(--accent-strong); }
+.why-body {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent-soft);
+  background: var(--accent-softer);
+  border-radius: 0 8px 8px 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  animation: fade-swap 220ms var(--ease-out);
+}
+
+/* Correct-this — same quiet chip language */
+.correct { margin-top: 0; display: inline-block; }
+.correct-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface-2);
+  border: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.correct-trigger:hover {
+  background: var(--accent-softer);
+  color: var(--accent-strong);
+  transform: none;
+}
+.correct-form {
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  animation: fade-swap 220ms var(--ease-out);
+}
+
+/* Effect preview block — "what will happen if you approve" */
+.effect-preview {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  border-left: 2px solid var(--accent);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.effect-preview .label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 3px;
+}
+
+/* Badge row */
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* Approval action group */
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.approval-actions .primary { flex-shrink: 0; }
+.approval-actions .secondary-row {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 11.5px;
+  margin-top: 2px;
+}
+.approval-actions .secondary-row button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  padding: 4px 10px;
+  font-size: 11.5px;
+  border-radius: 999px;
+}
+.approval-actions .secondary-row button:hover {
+  border-color: var(--border-strong);
+  color: var(--text-dim);
+  background: var(--surface-2);
+  transform: none;
+}
+.approval-actions .secondary-row button.danger-soft:hover {
+  color: var(--danger);
+  border-color: rgba(255, 110, 110, 0.3);
+  background: var(--danger-soft);
+}
+
+/* Batch review panel — layers onto .card.accent for the soft tinted background */
+.batch-list {
+  max-height: 280px;
+  overflow: auto;
+  margin: 10px 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.batch-row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.batch-row:last-child { border-bottom: none; }
+.batch-row.unchecked { opacity: 0.45; }
+.batch-row .title { font-size: 12.5px; }
+.batch-row .meta { font-size: 11px; color: var(--text-faint); }
+.batch-row input[type="checkbox"] { accent-color: var(--accent); }
+.batch-confirm {
+  margin-top: 10px;
+  padding: 10px;
+  background: var(--accent-softer);
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.batch-confirm label {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+/* Trace timeline upgrade */
+.trace-group {
+  margin-bottom: 8px;
+}
+.trace-group-header {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+  margin-bottom: 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px dashed var(--border);
+}
+
+/* Generative-UI card slot (chat-rendered) */
+.gen-ui-slot {
+  margin: 6px 0;
+}
+.gen-ui-slot .card { margin-bottom: 6px; }
 
 /* ── Animations ─────────────────────────────────────── */
 @keyframes pulse-ring {

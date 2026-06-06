@@ -40,7 +40,13 @@ export const ProposedActionSchema = z.object({
   title: z.string().min(1).max(140),
   /** Plain-language rationale shown to the user. */
   rationale: z.string().min(1).max(600),
+  /** What the user will see happen if they approve, plain language. */
+  effectPreview: z.string().max(400).optional(),
+  /** Why the agent surfaced this — the signal it acted on. */
+  whyShown: z.string().max(400).optional(),
   proposedBy: z.string(), // agent name
+  /** Confidence 0–1 from the proposing agent. */
+  confidence: z.number().min(0).max(1).optional(),
   /** Capability/permission name this action needs; used by ActionPolicyAgent. */
   requiredPermission: z.enum([
     'dom_read',
@@ -52,6 +58,8 @@ export const ProposedActionSchema = z.object({
     'label_suggest',
   ]),
   reversible: z.boolean(),
+  /** Eligible for low-risk batch approval (mark_read / archive only). */
+  batchable: z.boolean().optional(),
   risk: RiskLevelSchema,
   approvalStatus: ApprovalStatusSchema,
   /** Optional inline parameters (e.g. unsubscribe href, label name). */

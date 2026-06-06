@@ -176,7 +176,7 @@ export function AgentActivityPanel(): JSX.Element {
       </section>
       {open && (
         <div className="pulse-trace">
-          <AgentTraceTimeline events={events} />
+          <AgentTraceTimeline events={events} grouped={false} />
         </div>
       )}
     </>
