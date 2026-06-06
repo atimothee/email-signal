@@ -1,0 +1,70 @@
+[
+  {
+    "name": "blocks_delete_email",
+    "action": {
+      "id": "a1",
+      "type": "delete_email",
+      "title": "Delete spam",
+      "rationale": "junk",
+      "proposedBy": "UnsubscribeAgent",
+      "requiredPermission": "dom_click_unsubscribe",
+      "reversible": false,
+      "risk": "high",
+      "approvalStatus": "pending",
+      "params": {},
+      "proposedAt": "2026-06-06T10:00:00.000Z"
+    },
+    "expectAllow": false
+  },
+  {
+    "name": "allows_valid_unsubscribe",
+    "action": {
+      "id": "a2",
+      "type": "click_unsubscribe",
+      "title": "Unsubscribe Acme",
+      "rationale": "promo",
+      "proposedBy": "UnsubscribeAgent",
+      "requiredPermission": "dom_click_unsubscribe",
+      "reversible": false,
+      "risk": "medium",
+      "approvalStatus": "pending",
+      "params": { "unsubscribeHref": "https://acme.com/unsub" },
+      "proposedAt": "2026-06-06T10:00:00.000Z"
+    },
+    "expectAllow": true
+  },
+  {
+    "name": "blocks_http_unsubscribe",
+    "action": {
+      "id": "a3",
+      "type": "click_unsubscribe",
+      "title": "Unsubscribe insecure",
+      "rationale": "promo",
+      "proposedBy": "UnsubscribeAgent",
+      "requiredPermission": "dom_click_unsubscribe",
+      "reversible": false,
+      "risk": "medium",
+      "approvalStatus": "pending",
+      "params": { "unsubscribeHref": "http://acme.com/unsub" },
+      "proposedAt": "2026-06-06T10:00:00.000Z"
+    },
+    "expectAllow": false
+  },
+  {
+    "name": "blocks_memory_write_without_approval",
+    "action": {
+      "id": "a4",
+      "type": "remember_preference",
+      "title": "Remember preference",
+      "rationale": "auto",
+      "proposedBy": "MemoryAgent",
+      "requiredPermission": "memory_write",
+      "reversible": true,
+      "risk": "low",
+      "approvalStatus": "not_required",
+      "params": {},
+      "proposedAt": "2026-06-06T10:00:00.000Z"
+    },
+    "expectAllow": false
+  }
+]

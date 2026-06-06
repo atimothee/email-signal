@@ -1,0 +1,30 @@
+[
+  {
+    "name": "agent_suggested_must_be_approved",
+    "record": {
+      "id": "m1",
+      "kind": "preference",
+      "summary": "User dislikes weekly Substack digests from digest@substack.com",
+      "details": {},
+      "confidence": 0.78,
+      "createdAt": "2026-06-06T10:00:00.000Z",
+      "source": "agent_suggested",
+      "approvedByUser": false
+    },
+    "expectRequiresApproval": true
+  },
+  {
+    "name": "user_authored_stored_directly",
+    "record": {
+      "id": "m2",
+      "kind": "preference",
+      "summary": "User likes daily brief in bullet style",
+      "details": {},
+      "confidence": 1,
+      "createdAt": "2026-06-06T10:00:00.000Z",
+      "source": "user",
+      "approvedByUser": true
+    },
+    "expectRequiresApproval": false
+  }
+]

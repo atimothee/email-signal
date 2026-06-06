@@ -1,0 +1,65 @@
+[
+  {
+    "candidate": {
+      "id": "c1",
+      "threadId": "t1",
+      "provider": "gmail",
+      "from": { "name": "Acme Sales", "email": "noreply@marketing.acme.com" },
+      "to": [],
+      "subject": "🔥 24-hour flash sale — 60% off everything",
+      "snippet": "Don't miss our biggest deal of the year. Shop now and save.",
+      "bodyExcerpt": "Don't miss our biggest deal of the year. Unsubscribe here.",
+      "isUnread": true,
+      "isStarred": false,
+      "labels": [],
+      "hasUnsubscribeLink": true,
+      "unsubscribeLinkHrefs": ["https://acme.com/unsub"],
+      "attachmentsCount": 0,
+      "domAnchor": {}
+    },
+    "expectedCategory": "promotion",
+    "expectedAction": "unsubscribe"
+  },
+  {
+    "candidate": {
+      "id": "c2",
+      "threadId": "t2",
+      "provider": "gmail",
+      "from": { "name": "Mom", "email": "mom@family.example" },
+      "to": [],
+      "subject": "Call when you get a chance",
+      "snippet": "Just wanted to hear how things are going.",
+      "bodyExcerpt": "Just wanted to hear how things are going. Love you.",
+      "isUnread": true,
+      "isStarred": false,
+      "labels": [],
+      "hasUnsubscribeLink": false,
+      "unsubscribeLinkHrefs": [],
+      "attachmentsCount": 0,
+      "domAnchor": {}
+    },
+    "expectedCategory": null,
+    "expectedAction": null
+  },
+  {
+    "candidate": {
+      "id": "c3",
+      "threadId": "t3",
+      "provider": "gmail",
+      "from": { "name": "Substack Reads", "email": "digest@substack.com" },
+      "to": [],
+      "subject": "Your Tuesday digest",
+      "snippet": "Three picks from writers you follow this week.",
+      "bodyExcerpt": "Three picks from writers you follow this week. Unsubscribe.",
+      "isUnread": true,
+      "isStarred": false,
+      "labels": [],
+      "hasUnsubscribeLink": true,
+      "unsubscribeLinkHrefs": ["https://substack.com/unsubscribe"],
+      "attachmentsCount": 0,
+      "domAnchor": {}
+    },
+    "expectedCategory": "newsletter",
+    "expectedAction": "unsubscribe"
+  }
+]
