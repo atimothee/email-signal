@@ -19,8 +19,12 @@ import {
 } from './cache.js';
 import { reconcilePreferences } from './memory.js';
 import { dedupDecisions } from './dedup.js';
-
-const MODEL = process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini';
+import {
+  ClientSettings,
+  DEFAULT_WANDB_PROJECT,
+  resolveConfig,
+  requireOpenAIKey,
+} from './config.js';
 
 /** Max candidates per parallel classifier call. */
 const BATCH_SIZE = Number(process.env['EMAIL_SIGNAL_BATCH_SIZE'] ?? 25);
@@ -68,16 +72,32 @@ function safeJson(v: unknown): string {
 }
 
 export async function initServerWeave(): Promise<void> {
+  // Boot-time init from env only (extension hasn't talked to us yet).
+  await ensureServerWeave();
+}
+
+/**
+ * Initialize Weave once, lazily, from either a forwarded key/project (extension
+ * Settings) or the server env. Idempotent: if Weave is already up this returns
+ * immediately and does NOT hot-swap — hot-swapping the Weave project mid-process
+ * is not supported, so the FIRST key/project to initialize wins; restart the
+ * server to change it. Best-effort: never throws (tracing must not break a run).
+ */
+export async function ensureServerWeave(
+  wandbApiKey?: string,
+  wandbProject?: string
+): Promise<void> {
   if (weaveReady) return;
-  if (!process.env['WANDB_API_KEY']) return; // tracing disabled silently
+  const cfg = resolveConfig({ wandbApiKey, wandbProject });
+  const apiKey = cfg.wandbApiKey;
+  if (!apiKey) return; // tracing disabled silently
   try {
     const weave = await import('weave');
-    const project = process.env['WANDB_PROJECT'] ?? 'email-signal';
+    const project = cfg.wandbProject;
     // The weave JS SDK authenticates from ~/.netrc, NOT from WANDB_API_KEY in the
     // environment — so an env-only key makes init() throw "Could not find entry in
     // netrc file". Log in explicitly with the key first (it writes the netrc).
-    const apiKey = process.env['WANDB_API_KEY'];
-    if (apiKey) await weave.login(apiKey);
+    await weave.login(apiKey);
     await weave.init(project);
     weaveMod = weave;
     weaveReady = true;
@@ -99,7 +119,7 @@ export async function initServerWeave(): Promise<void> {
  */
 export function weaveDashboardUrl(): string | null {
   if (!process.env['WANDB_API_KEY']) return null;
-  const project = process.env['WANDB_PROJECT'] ?? 'email-signal';
+  const project = process.env['WANDB_PROJECT'] ?? DEFAULT_WANDB_PROJECT;
   return `https://wandb.ai/${project}/weave`;
 }
 
@@ -122,18 +142,13 @@ async function traced<T>(name: string, input: unknown, fn: () => Promise<T>): Pr
 }
 
 /**
- * Resolve the OpenAI key for this run. The extension forwards the key the user
- * pasted in Settings; we fall back to the server's own env. The key is only ever
- * used here, with the `@openai/agents` SDK — never sent anywhere else.
+ * Resolve the OpenAI key for this run and install it for the Agents SDK. The
+ * extension forwards the key the user pasted in Settings; we fall back to the
+ * server's own env (see resolveConfig). The key is only ever used here, with the
+ * `@openai/agents` SDK — never sent anywhere else.
  */
-function ensureKey(override?: string): void {
-  const key = override?.trim() || process.env['OPENAI_API_KEY'];
-  if (!key) {
-    throw new Error(
-      'No OpenAI API key. Add one in the extension Settings (it is sent to this sidecar) or in server/.env.'
-    );
-  }
-  setDefaultOpenAIKey(key);
+function ensureKey(settings?: ClientSettings): void {
+  setDefaultOpenAIKey(requireOpenAIKey(settings));
 }
 
 // ---- Shared schemas ----
@@ -169,8 +184,12 @@ interface ClassifyInput {
   turnId: string;
   candidates: EmailCandidate[];
   writer: SseWriter;
-  /** Key forwarded from the extension Settings; overrides server env if set. */
-  apiKey?: string;
+  /**
+   * Overridable config forwarded from the extension Settings (OpenAI key, model,
+   * Weave key/project). Each field falls back to server env then a default via
+   * resolveConfig; absent/empty Settings reproduce the env-only behavior exactly.
+   */
+  settings?: ClientSettings;
   /**
    * Signed-in mail account (scraped from the Gmail DOM, no OAuth). Used only to
    * namespace the classify cache so two accounts on one Redis never mix. Hashed
@@ -203,11 +222,11 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out.length === 0 ? [[]] : out;
 }
 
-function buildClutterAgent(): Agent<unknown, typeof ClutterBatchSchema> {
+function buildClutterAgent(model: string): Agent<unknown, typeof ClutterBatchSchema> {
   return new Agent({
     name: AGENT_NAMES.clutter,
     instructions: INSTRUCTIONS[AGENT_NAMES.clutter],
-    model: MODEL,
+    model,
     outputType: ClutterBatchSchema,
   });
 }
@@ -255,11 +274,11 @@ HARD RULES (these are the exact mistakes to avoid):
   - Newsletters, promotions, notifications, social updates are NEVER decisions — omit them entirely.
   - Prefer FEW, high-confidence decisions. If nothing genuinely needs the user, return an empty list. NEVER pad.`;
 
-function buildDecisionAgent(): Agent<unknown, typeof DecisionBatchSchema> {
+function buildDecisionAgent(model: string): Agent<unknown, typeof DecisionBatchSchema> {
   return new Agent({
     name: 'DecisionSynthesizerAgent',
     instructions: DECISION_INSTRUCTIONS,
-    model: MODEL,
+    model,
     outputType: DecisionBatchSchema,
   });
 }
@@ -283,11 +302,11 @@ HARD RULES:
 
 const DaySummarySchema = z.object({ summary: z.string() });
 
-function buildDaySummaryAgent(): Agent<unknown, typeof DaySummarySchema> {
+function buildDaySummaryAgent(model: string): Agent<unknown, typeof DaySummarySchema> {
   return new Agent({
     name: 'DaySummaryAgent',
     instructions: DAY_SUMMARY_INSTRUCTIONS,
-    model: MODEL,
+    model,
     outputType: DaySummarySchema,
   });
 }
@@ -298,7 +317,7 @@ function buildDaySummaryAgent(): Agent<unknown, typeof DaySummarySchema> {
  * activity). Fully defensive — any failure degrades to '' and never throws, so a
  * summary problem can never break the decisions flow.
  */
-async function summarizeDay(decisions: Decision[]): Promise<string> {
+async function summarizeDay(decisions: Decision[], model: string): Promise<string> {
   if (decisions.length === 0) return '';
   try {
     const slim = decisions.map((d) => ({
@@ -314,7 +333,7 @@ async function summarizeDay(decisions: Decision[]): Promise<string> {
       { decisions: decisions.length },
       () =>
         run(
-          buildDaySummaryAgent(),
+          buildDaySummaryAgent(model),
           `Write the user's one-sentence day summary from these decisions. Return {summary: string} only.\n${JSON.stringify(slim)}`
         )
     );
@@ -339,7 +358,11 @@ async function summarizeDay(decisions: Decision[]): Promise<string> {
  * thin renderer — no intelligence runs in the browser.
  */
 export async function runAgentClassification(input: ClassifyInput): Promise<ClassifyOutput> {
-  ensureKey(input.apiKey);
+  const cfg = resolveConfig(input.settings);
+  ensureKey(input.settings);
+  // Initialize Weave on first run if a key is available (override or env). No-op
+  // and never throws once ready / when no key — tracing must never break a run.
+  await ensureServerWeave(cfg.wandbApiKey, cfg.wandbProject).catch(() => {});
   const sessionId = nanoid();
   const { turnId, candidates, writer, account } = input;
   // Anchor "now" once for the whole scan: the model's temporal frame and all
@@ -378,7 +401,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     // The cache stores only { clutter, decisions }; recompute the one-sentence
     // day summary over the cached ACTIVE (non-demoted) decisions (cheap, honest,
     // degrades to ''). Cached decisions already carry their demoted flag.
-    return { ...cached, summary: await summarizeDay(cached.decisions.filter((d) => !d.demoted)) };
+    return { ...cached, summary: await summarizeDay(cached.decisions.filter((d) => !d.demoted), cfg.model) };
   }
 
   await emit(writer, sessionId, turnId, {
@@ -386,8 +409,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     message: `Classifying ${candidates.length} candidates`,
   });
 
-  const clutterAgent = buildClutterAgent();
-  const decisionAgent = buildDecisionAgent();
+  const clutterAgent = buildClutterAgent(cfg.model);
+  const decisionAgent = buildDecisionAgent(cfg.model);
 
   // ── 1) Clutter, in parallel batches ──
   const clutterBatches = chunk(candidates, BATCH_SIZE);
@@ -477,7 +500,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     // a consolidation LLM call and reproducible. Fall back to the LLM merge only
     // when embeddings are unavailable.
     if (drafts.length > MAX_DECISIONS) {
-      const deduped = await dedupDecisions(drafts, input.apiKey);
+      const deduped = await dedupDecisions(drafts, cfg.openaiKey);
       if (deduped.clustered && deduped.merged.length) {
         await emit(writer, sessionId, turnId, {
           kind: 'agent_end',
@@ -505,7 +528,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   // only — demoted items are "likely past — handled?", so they must not colour
   // the day summary. Honest: '' when nothing is active. Never throws — a summary
   // failure degrades to '' (see summarizeDay).
-  const summary = await summarizeDay(decisions.filter((d) => !d.demoted));
+  const summary = await summarizeDay(decisions.filter((d) => !d.demoted), cfg.model);
 
   // Persist the derived result so the next identical scan is a cache hit — but
   // ONLY when every batch succeeded. Caching a partially-failed run would replay
@@ -800,11 +823,14 @@ interface ChatInput {
     recentDecisions?: Decision[];
   };
   writer: SseWriter;
-  apiKey?: string;
+  /** Overridable config forwarded from the extension Settings (see ClassifyInput). */
+  settings?: ClientSettings;
 }
 
 export async function runAgentChat(input: ChatInput): Promise<string> {
-  ensureKey(input.apiKey);
+  const cfg = resolveConfig(input.settings);
+  ensureKey(input.settings);
+  await ensureServerWeave(cfg.wandbApiKey, cfg.wandbProject).catch(() => {});
   const sessionId = nanoid();
   const { turnId, message, context, writer } = input;
 
@@ -816,7 +842,7 @@ export async function runAgentChat(input: ChatInput): Promise<string> {
       INSTRUCTIONS[AGENT_NAMES.orchestrator] +
       "\n\nYou are answering a chat message about the user's inbox. Be concise. If you don't know, say so. " +
       'Never propose to delete or send mail.',
-    model: MODEL,
+    model: cfg.model,
   });
 
   const ctxBlob = context

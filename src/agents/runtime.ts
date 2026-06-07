@@ -14,6 +14,51 @@ export async function getOpenAIKey(): Promise<string | null> {
   return process.env['OPENAI_API_KEY'] ?? null;
 }
 
+/** The overridable config forwarded to the sidecar in each request body. */
+export interface ClientSettings {
+  apiKey?: string;
+  model?: string;
+  wandbApiKey?: string;
+  wandbProject?: string;
+}
+
+/**
+ * Gather all four Settings-first overrides (OpenAI key, chat model, Weave
+ * key/project) to forward to the sidecar. Blank fields are dropped so an empty
+ * Settings input never shadows server/.env — the sidecar resolves each value
+ * Settings → env → default. In Node (evals) we read the matching process.env.
+ */
+export async function getClientSettings(): Promise<ClientSettings> {
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    const v = await chrome.storage.local.get([
+      STORAGE_KEYS.apiKey,
+      STORAGE_KEYS.model,
+      STORAGE_KEYS.wandbApiKey,
+      STORAGE_KEYS.wandbProject,
+    ]);
+    const out: ClientSettings = {};
+    const apiKey = (v[STORAGE_KEYS.apiKey] as string | undefined)?.trim();
+    const model = (v[STORAGE_KEYS.model] as string | undefined)?.trim();
+    const wandbApiKey = (v[STORAGE_KEYS.wandbApiKey] as string | undefined)?.trim();
+    const wandbProject = (v[STORAGE_KEYS.wandbProject] as string | undefined)?.trim();
+    if (apiKey) out.apiKey = apiKey;
+    if (model) out.model = model;
+    if (wandbApiKey) out.wandbApiKey = wandbApiKey;
+    if (wandbProject) out.wandbProject = wandbProject;
+    return out;
+  }
+  const out: ClientSettings = {};
+  const apiKey = process.env['OPENAI_API_KEY']?.trim();
+  const model = process.env['EMAIL_SIGNAL_MODEL']?.trim();
+  const wandbApiKey = process.env['WANDB_API_KEY']?.trim();
+  const wandbProject = process.env['WANDB_PROJECT']?.trim();
+  if (apiKey) out.apiKey = apiKey;
+  if (model) out.model = model;
+  if (wandbApiKey) out.wandbApiKey = wandbApiKey;
+  if (wandbProject) out.wandbProject = wandbProject;
+  return out;
+}
+
 export async function isDryRun(): Promise<boolean> {
   if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     const v = await chrome.storage.local.get(STORAGE_KEYS.dryRun);
