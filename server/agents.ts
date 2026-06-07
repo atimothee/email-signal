@@ -73,6 +73,11 @@ export async function initServerWeave(): Promise<void> {
   try {
     const weave = await import('weave');
     const project = process.env['WANDB_PROJECT'] ?? 'email-signal';
+    // The weave JS SDK authenticates from ~/.netrc, NOT from WANDB_API_KEY in the
+    // environment — so an env-only key makes init() throw "Could not find entry in
+    // netrc file". Log in explicitly with the key first (it writes the netrc).
+    const apiKey = process.env['WANDB_API_KEY'];
+    if (apiKey) await weave.login(apiKey);
     await weave.init(project);
     weaveMod = weave;
     weaveReady = true;
