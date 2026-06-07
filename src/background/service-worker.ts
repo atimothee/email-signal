@@ -7,6 +7,7 @@ import { USER_ID } from '@agents/runtime';
 import { getMemoryStore } from '@/memory';
 import { appendLedger, getLedger } from '@/ledger/local-ledger';
 import { recordTrace } from '@/weave/tracing';
+import { postFeedback } from '@/common/server-client';
 import { registerNotificationClicks } from './notifications';
 import { AccountIdentitySchema } from '@schemas/index';
 import type { ExtMessage } from '@schemas/index';
@@ -54,6 +55,26 @@ function buildInboxUrl(srcUrl: string | undefined): string {
   const m = srcUrl?.match(/mail\.google\.com\/mail\/u\/(\d+)/);
   const u = m?.[1] ?? '0';
   return `https://mail.google.com/mail/u/${u}/#inbox`;
+}
+
+/**
+ * Attach a production-feedback signal to the latest scan's Weave trace (issue #46).
+ * The decisions on screen always come from the most recent scan, so its
+ * `weaveCallId` (stashed by the orchestrator) is the right trace to link an
+ * accept/snooze/mute to. Fully best-effort: no call id (Weave off) → no-op, and
+ * `postFeedback` itself never throws, so this can never disrupt the action it
+ * accompanies.
+ */
+async function sendScanFeedback(value: string, decisionId?: string): Promise<void> {
+  try {
+    const callId = (await chrome.storage.local.get(STORAGE_KEYS.scanTrace))[
+      STORAGE_KEYS.scanTrace
+    ] as string | undefined;
+    if (!callId) return;
+    await postFeedback({ callId, signal: 'decision', value, decisionId });
+  } catch {
+    /* never let feedback disrupt the disposition/mute it accompanies */
+  }
 }
 
 /** Best-effort: re-focus a tab, then remove the disposable scan tab. */
@@ -308,6 +329,11 @@ onMessage(async (msg, sender) => {
         // is what made Mute / "ignore sender" no-ops.
         const store = await getMemoryStore();
         await store.upsertPreference(USER_ID, msg.preference);
+        // A mute ("don't surface this sender again") is a strong negative signal
+        // on the scan that surfaced it — capture it as feedback (issue #46).
+        if (msg.preference.kind === 'ignored_sender') {
+          void sendScanFeedback('muted', String(msg.preference.value));
+        }
         return;
       }
       case 'panel/decision_action': {
@@ -324,6 +350,11 @@ onMessage(async (msg, sender) => {
           else state[emailId] = { status: msg.action === 'handled' ? 'handled' : 'snoozed', until: msg.untilMs };
         }
         await chrome.storage.local.set({ [key]: state });
+        // 'handled' = a good, acted-on decision; 'snooze' = not now. Both are
+        // signal on the scan that produced it; 'restore' is an undo, not feedback.
+        if (msg.action !== 'restore') {
+          void sendScanFeedback(msg.action, msg.decisionId);
+        }
         return;
       }
       case 'panel/batch_approve': {

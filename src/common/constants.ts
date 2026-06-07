@@ -26,6 +26,12 @@ export const STORAGE_KEYS = {
   notifyClutter: 'es.notify.clutter.v1',
   /** Dedup state so identical results don't re-notify (last signatures + brief date). */
   notifyState: 'es.notify.state.v1',
+  /**
+   * Weave call id of the most recent scan (issue #46). The decisions on screen
+   * always come from the latest scan, so disposition/mute feedback attaches to
+   * this call. Set when a scan returns a `weaveCallId`; absent when Weave is off.
+   */
+  scanTrace: 'es.scan.trace.v1',
 } as const;
 
 export const DEFAULTS = {
