@@ -22,6 +22,7 @@ import {
 } from '../src/schemas/index.js';
 import { runAgentClassification, runAgentChat, initServerWeave, weaveDashboardUrl } from './agents.js';
 import { cacheStatus, initCache } from './cache.js';
+import { initVectorIndex, vectorIndexStatus } from './vector-index.js';
 import type { SseWriter } from './trace-bridge.js';
 
 const PORT = Number(process.env['EMAIL_SIGNAL_PORT'] ?? 3030);
@@ -53,6 +54,7 @@ app.get('/health', (c) =>
     // Effective default chat model from env (Settings overrides per-request).
     model: resolveConfig().model,
     cache: cacheStatus(),
+    vectorIndex: vectorIndexStatus(),
   })
 );
 
@@ -94,6 +96,8 @@ const ClassifyBody = z.object({
   account: z.string().optional(),
   /** Standing user preferences recalled client-side; merged into synthesis. */
   preferences: z.array(UserPreferenceSchema).max(200).optional(),
+  /** IANA timezone of the user's browser; anchors the temporal frame to their day. */
+  timezone: z.string().max(64).optional(),
 });
 
 // ---- Classify + synthesize (SSE) ----
@@ -110,7 +114,8 @@ app.post('/orchestrate/classify', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
   }
-  const { turnId = nanoid(), candidates, apiKey, settings, account, preferences } = parsed.data;
+  const { turnId = nanoid(), candidates, apiKey, settings, account, preferences, timezone } =
+    parsed.data;
   const effective = effectiveSettings(settings, apiKey);
 
   return streamSSE(c, async (stream) => {
@@ -120,7 +125,7 @@ app.post('/orchestrate/classify', async (c) => {
       },
     };
     try {
-      const result = await runAgentClassification({ turnId, candidates, writer, settings: effective, account, preferences });
+      const result = await runAgentClassification({ turnId, candidates, writer, settings: effective, account, preferences, timezone });
       await writer.send('classification', { clutter: result.clutter });
       await writer.send('decisions', { decisions: result.decisions, summary: result.summary });
       await writer.send('done', { ok: true });
@@ -232,6 +237,7 @@ void initServerWeave().catch((err) =>
   console.warn('[emailsignal-server] weave init failed', err)
 );
 initCache();
+initVectorIndex();
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   // eslint-disable-next-line no-console
