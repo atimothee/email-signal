@@ -7,6 +7,7 @@ import { DecisionSchema } from './decision.js';
 import { DailyBriefSchema } from './brief.js';
 import { AgentTraceEventSchema } from './trace.js';
 import { MemorySuggestionSchema, UserPreferenceSchema } from './memory.js';
+import { AccountIdentitySchema } from './identity.js';
 
 /**
  * Wire protocol between content script <-> service worker <-> side panel.
@@ -30,6 +31,7 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
     before: z.record(z.unknown()).optional(),
     after: z.record(z.unknown()).optional(),
   }),
+  z.object({ kind: z.literal('content/account_identity'), identity: AccountIdentitySchema }),
   // background -> content
   z.object({ kind: z.literal('bg/request_scan'), source: z.enum(['inbox', 'thread', 'search']) }),
   z.object({ kind: z.literal('bg/execute_dom_action'), action: ProposedActionSchema }),
@@ -107,6 +109,7 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('bg/ledger_entry'), entry: ActionLedgerEntrySchema }),
   z.object({ kind: z.literal('bg/trace_event'), event: AgentTraceEventSchema }),
   z.object({ kind: z.literal('bg/chat_reply'), text: z.string(), turnId: z.string().optional() }),
+  z.object({ kind: z.literal('bg/account_identity'), identity: AccountIdentitySchema }),
   z.object({ kind: z.literal('bg/error'), message: z.string() }),
 ]);
 export type ExtMessage = z.infer<typeof ExtMessageSchema>;

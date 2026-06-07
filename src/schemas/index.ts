@@ -11,4 +11,5 @@ export * from './action.js';
 export * from './memory.js';
 export * from './brief.js';
 export * from './trace.js';
+export * from './identity.js';
 export * from './messaging.js';

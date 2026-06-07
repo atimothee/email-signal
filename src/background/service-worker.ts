@@ -5,6 +5,7 @@ import { log } from '@/common/log';
 import { runOrchestratorTurn } from '@agents/orchestrator';
 import { appendLedger, getLedger } from '@/ledger/local-ledger';
 import { recordTrace } from '@/weave/tracing';
+import { AccountIdentitySchema } from '@schemas/index';
 import type { ExtMessage } from '@schemas/index';
 
 // Open the side panel when the user clicks the toolbar icon.
@@ -52,6 +53,13 @@ onMessage(async (msg, sender) => {
         await runOrchestratorTurn({ trigger: 'scan', scan: msg.scan, sourceTabId: sender.tab?.id });
         return;
       }
+      case 'content/account_identity': {
+        // Persist so the panel can hydrate on open even before the next scan,
+        // and broadcast for any panel that's already listening.
+        await chrome.storage.local.set({ [STORAGE_KEYS.account]: msg.identity });
+        await broadcastToPanel({ kind: 'bg/account_identity', identity: msg.identity });
+        return;
+      }
       case 'content/dom_action_result': {
         await appendLedger({
           proposedActionId: msg.proposedActionId,
@@ -74,6 +82,15 @@ onMessage(async (msg, sender) => {
         const entries = await getLedger();
         for (const e of entries.slice(-50)) {
           await broadcastToPanel({ kind: 'bg/ledger_entry', entry: e });
+        }
+        // Re-emit the last-known connected account so the top bar fills in
+        // immediately, even if the Gmail tab reported it before the panel opened.
+        const storedAccount = (await chrome.storage.local.get(STORAGE_KEYS.account))[
+          STORAGE_KEYS.account
+        ];
+        const account = AccountIdentitySchema.safeParse(storedAccount);
+        if (account.success) {
+          await broadcastToPanel({ kind: 'bg/account_identity', identity: account.data });
         }
         return;
       }

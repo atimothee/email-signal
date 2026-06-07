@@ -37,7 +37,7 @@ function describe(
   ledger: ActionLedgerEntry[],
   dryRun: boolean,
 ): string {
-  if (!event) return 'Ready when you are';
+  if (!event) return 'Standing by';
 
   const who = humanizeAgent(event.agent);
 
@@ -162,7 +162,7 @@ export function AgentActivityPanel(): JSX.Element {
     if (latest && ERROR_KINDS.has(latest.kind)) state = 'error';
     else if (latest && ATTENTION_KINDS.has(latest.kind)) state = 'attention';
     message = describe(latest, proposedActions, ledger, dryRun);
-    sub = latest ? `Last activity ${relativeTime(latest.at, nowMs)}` : 'Click scan to get started';
+    sub = latest ? `Last activity ${relativeTime(latest.at, nowMs)}` : 'Your inbox activity shows up here';
   }
 
   return (

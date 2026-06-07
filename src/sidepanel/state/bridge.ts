@@ -36,3 +36,14 @@ export async function send(msg: import('@schemas/index').ExtMessage): Promise<vo
     console.debug('[EmailSignal] panel send failed', err);
   }
 }
+
+/**
+ * Open Gmail in a new tab. "Connecting" an inbox here just means having a
+ * signed-in mail tab for the content script to read — so this is the one-click
+ * way to get there when no account has been detected yet.
+ */
+export function openGmailTab(): void {
+  if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+    void chrome.tabs.create({ url: 'https://mail.google.com/' });
+  }
+}

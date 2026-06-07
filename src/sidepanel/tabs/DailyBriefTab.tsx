@@ -5,7 +5,7 @@ import { MemorySuggestionCard } from '../cards/MemorySuggestionCard';
 import { DecisionCard } from '../cards/DecisionCard';
 import { BatchActionReviewPanel } from '../cards/BatchActionReviewPanel';
 import { EmptyState, Skeleton, ErrorState } from '../cards/primitives';
-import { send } from '../state/bridge';
+import { send, openGmailTab } from '../state/bridge';
 import type { Decision, DecisionTheme, ProposedAction } from '@schemas/index';
 
 const THEME_LABEL: Record<DecisionTheme, string> = {
@@ -89,6 +89,7 @@ function isBatchable(a: ProposedAction): boolean {
 
 export function DailyBriefTab(): JSX.Element {
   const decisions = usePanelStore((s) => s.decisions);
+  const account = usePanelStore((s) => s.account);
   const scanStatus = usePanelStore((s) => s.scanStatus);
   const scanProgress = usePanelStore((s) => s.scanProgress);
   const pending = usePanelStore((s) =>
@@ -106,14 +107,25 @@ export function DailyBriefTab(): JSX.Element {
   const hasContent =
     decisions.length > 0 || pending.length > 0 || memorySuggestions.length > 0;
 
-  // Never scanned yet, nothing to show.
+  // Never scanned yet, nothing to show. A single primary action — and we don't
+  // tell the user to "open Gmail" when we can already see their account (#11).
   if (scanStatus === 'idle' && !hasContent) {
+    if (account) {
+      return (
+        <EmptyState
+          title="Scan your inbox"
+          body="I'll read your last few hundred emails and surface only what genuinely needs a decision — nothing else."
+          action={{ label: 'Scan inbox', onClick: () => send({ kind: 'panel/request_scan' }) }}
+          hint="Nothing happens without your approval — you'll see every action here first."
+        />
+      );
+    }
     return (
       <EmptyState
-        title="Ready when you are"
-        body="Open Gmail in another tab, then scan your inbox. I'll read your last few hundred emails and surface only what needs you."
-        action={{ label: 'Scan inbox', onClick: () => send({ kind: 'panel/request_scan' }) }}
-        hint="Nothing happens without your approval — you'll see every action here first."
+        title="Open Gmail to get started"
+        body="Email Signal reads the Gmail tab you're signed into. Open Gmail, then scan — I'll surface only what needs you."
+        action={{ label: 'Open Gmail', onClick: openGmailTab }}
+        hint="Once Gmail is open, hit Scan and I'll read your last few hundred emails."
       />
     );
   }
@@ -146,7 +158,7 @@ export function DailyBriefTab(): JSX.Element {
   if (scanStatus === 'error' && decisions.length === 0) {
     return (
       <div>
-        <ErrorState message={lastError ?? 'The EmailSignal sidecar is unavailable.'} />
+        <ErrorState message={lastError ?? 'The Email Signal sidecar is unavailable.'} />
         <EmptyState
           title="Can't reach the sidecar"
           body="All intelligence runs in the local Node sidecar. Start it with “npm run server”, then scan again."

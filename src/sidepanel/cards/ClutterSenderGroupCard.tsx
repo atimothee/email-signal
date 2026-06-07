@@ -58,7 +58,7 @@ export function ClutterSenderGroupCard({
           <div className="label">Confirm unsubscribe</div>
           <div>
             We'll open <code>{group.senderDomain}</code>'s unsubscribe page in a new tab. You
-            will confirm on their page — EmailSignal never clicks the final unsubscribe
+            will confirm on their page — Email Signal never clicks the final unsubscribe
             button. This is a per-sender confirmation; we do not batch unsubscribes.
           </div>
         </div>

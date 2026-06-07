@@ -332,6 +332,16 @@ function hydrateClutter(f: ClutterFinding, byId: Map<string, EmailCandidate>): C
 
 const URGENCY_RANK: Record<string, number> = { critical: 3, high: 2, normal: 1, low: 0 };
 
+/**
+ * Bare category words a title must never collapse to — these are themes/synonyms,
+ * not the verb-led decision titles the contract requires.
+ */
+const DEGENERATE_TITLES = new Set([
+  'money', 'reply', 'replies', 'schedule', 'scheduling', 'job', 'career', 'travel',
+  'admin', 'security', 'other', 'fyi', 'payment', 'payments', 'bill', 'bills',
+  'invoice', 'invoices', 'email', 'emails', 'inbox', 'todo', 'todos',
+]);
+
 function hydrateDecisions(
   drafts: DecisionOut[],
   byId: Map<string, EmailCandidate>,
@@ -339,6 +349,12 @@ function hydrateDecisions(
 ): Decision[] {
   const out: Decision[] = [];
   for (const d of drafts) {
+    // Guard against degenerate titles. A Decision title is contracted to be
+    // verb-led and in the user's voice ("Pay Absa R1,240 by Friday"); when the
+    // model instead echoes the bare category ("money", "reply"), that leaks
+    // into the Today list as a meaningless card heading — drop it.
+    const titleNorm = d.title.trim().toLowerCase().replace(/[^a-z]/g, '');
+    if (!titleNorm || DEGENERATE_TITLES.has(titleNorm)) continue;
     const emailIds = d.emailIds.filter((id) => byId.has(id));
     const senders =
       d.senders.filter((s) => s && !s.includes('@')).length > 0
