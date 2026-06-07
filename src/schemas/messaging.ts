@@ -50,6 +50,13 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('panel/chat_message'), text: z.string().min(1).max(4000) }),
   z.object({ kind: z.literal('panel/approve_action'), approval: ApprovalRecordSchema }),
   z.object({ kind: z.literal('panel/reject_action'), proposedActionId: z.string() }),
+  /**
+   * Chat-originated action: the side panel proposes a fully-formed action (one
+   * the user just approved in a chat approval card, which is NOT yet in the
+   * ledger). The background records it, runs the policy gate, executes it, and
+   * logs every step. The user's approval IS the gate — no second card.
+   */
+  z.object({ kind: z.literal('panel/execute_action'), action: ProposedActionSchema }),
   z.object({
     kind: z.literal('panel/batch_approve'),
     proposedActionIds: z.array(z.string()).min(1).max(200),
@@ -86,7 +93,7 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('bg/scan_complete'), scan: ScanResultSchema }),
   z.object({
     kind: z.literal('bg/turn_started'),
-    trigger: z.enum(['scan', 'brief', 'chat', 'approval', 'periodic']).optional(),
+    trigger: z.enum(['scan', 'brief', 'chat', 'approval', 'execute', 'periodic']).optional(),
   }),
   z.object({
     kind: z.literal('bg/scan_progress'),

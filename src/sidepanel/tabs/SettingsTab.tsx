@@ -3,6 +3,7 @@ import { usePanelStore } from '../state/store';
 import { send } from '../state/bridge';
 import { STORAGE_KEYS } from '@/common/constants';
 import { nanoid } from 'nanoid';
+import { ActionLedgerTable } from '../cards/ActionLedgerTable';
 
 interface ServerStatus {
   state: 'idle' | 'checking' | 'ok' | 'down';
@@ -22,6 +23,7 @@ export function SettingsTab(): JSX.Element {
   const setDryRun = usePanelStore((s) => s.setDryRun);
   const killSwitch = usePanelStore((s) => s.killSwitch);
   const setKillSwitch = usePanelStore((s) => s.setKillSwitch);
+  const ledger = usePanelStore((s) => s.ledger);
 
   const [importantSender, setImportantSender] = useState('');
   const [ignoreSender, setIgnoreSender] = useState('');
@@ -193,8 +195,9 @@ export function SettingsTab(): JSX.Element {
         <div>
           <div className="label">Dry run</div>
           <div className="hint">
-            When ON, approved actions are logged to the ledger but no DOM clicks happen.
-            Recommended while you trust-build.
+            When ON, state-changing actions (mark read, archive, unsubscribe, label) are logged
+            but not executed. Opening or revealing an email in Gmail still works. Recommended
+            while you trust-build.
           </div>
         </div>
         <button
@@ -271,6 +274,24 @@ export function SettingsTab(): JSX.Element {
         >
           Add
         </button>
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <div className="label">Activity log</div>
+          <span className="pill">{ledger.length}</span>
+        </div>
+        <div className="hint">
+          Every action the agent proposes, runs, is blocked from, or you reject — newest first.
+          This is the full audit trail; nothing the agent does happens off the record.
+        </div>
+        <div style={{ marginTop: 8 }}>
+          {ledger.length === 0 ? (
+            <div className="subtle">No activity yet. Approve an action and it'll appear here.</div>
+          ) : (
+            <ActionLedgerTable entries={ledger.slice(-50)} />
+          )}
+        </div>
       </div>
 
       <div className="subtle" style={{ marginTop: 14 }}>

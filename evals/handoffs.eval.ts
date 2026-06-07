@@ -124,7 +124,7 @@ export async function runHandoffsEval(): Promise<Result> {
       approvedBy: 'user',
       approvedAt: new Date().toISOString(),
     };
-    const result = await orch.runUnsubscribeAgent({ action, approval, sourceTabId: undefined, ctx });
+    const result = await orch.runActionExecutor({ action, approval, sourceTabId: undefined, ctx });
     await orch.runAuditLedgerAgent(
       {
         proposedActionId: action.id,

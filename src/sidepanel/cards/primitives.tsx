@@ -107,12 +107,14 @@ export function ConfidenceBadge({ value, label = 'Confidence' }: ConfidenceBadge
 }
 
 interface RiskBadgeProps {
-  risk: 'none' | 'low' | 'medium' | 'high';
+  /** Tolerate undefined so a malformed action never renders "undefined risk". */
+  risk?: 'none' | 'low' | 'medium' | 'high' | null;
 }
 
 export function RiskBadge({ risk }: RiskBadgeProps): JSX.Element {
-  const tone = risk === 'high' ? 'critical' : risk === 'medium' ? 'high' : risk === 'low' ? 'warn' : '';
-  const label = risk === 'none' ? 'no risk' : `${risk} risk`;
+  const level = risk ?? 'low';
+  const tone = level === 'high' ? 'critical' : level === 'medium' ? 'high' : level === 'low' ? 'warn' : '';
+  const label = level === 'none' ? 'no risk' : `${level} risk`;
   return <span className={`pill ${tone}`}>{label}</span>;
 }
 

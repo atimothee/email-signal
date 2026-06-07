@@ -31,10 +31,12 @@ import { classifyViaSidecar, chatViaSidecar } from './llm-runner';
 import { log } from '@/common/log';
 
 interface OrchestratorTurnInput {
-  trigger: 'scan' | 'brief' | 'chat' | 'approval' | 'periodic';
+  trigger: 'scan' | 'brief' | 'chat' | 'approval' | 'execute' | 'periodic';
   scan?: ScanResult;
   userText?: string;
   approval?: ApprovalRecord;
+  /** For 'execute': a chat-approved action that isn't in the ledger yet. */
+  action?: ProposedAction;
   sourceTabId?: number;
 }
 
@@ -84,6 +86,9 @@ export async function runOrchestratorTurn(input: OrchestratorTurnInput): Promise
         break;
       case 'approval':
         if (input.approval) await handleApproval(input.approval, ctx, input.sourceTabId);
+        break;
+      case 'execute':
+        if (input.action) await handleExecute(input.action, ctx, input.sourceTabId);
         break;
       case 'periodic':
         // Periodic ticks are handled by the alarm in the service worker, which
@@ -291,10 +296,10 @@ async function handleApproval(
     return;
   }
 
-  // Approved path. Always emit execute_unsubscribe → UnsubscribeAgent and
-  // always emit log_audit → AuditLedgerAgent afterward, whether execution
-  // succeeded or failed.
-  const result = await runUnsubscribeAgent(
+  // Approved path. Run the (now general) action executor and always emit
+  // log_audit → AuditLedgerAgent afterward, whether execution succeeded or
+  // failed.
+  const result = await runActionExecutor(
     { action: entry.proposed, approval, sourceTabId, ctx }
   );
 
@@ -306,6 +311,74 @@ async function handleApproval(
     },
     ctx
   );
+}
+
+// ---------------- Execute turn (chat-approved actions) ----------------
+
+/**
+ * A chat approval card produced an action that the user just approved, but it
+ * was never put through the scan→propose pipeline, so it isn't in the ledger.
+ * Record it, run the deterministic policy gate, execute, and log every step —
+ * so chat-initiated actions are first-class and fully audited, just like
+ * scan-proposed ones. The user's approval on the card IS the gate.
+ */
+async function handleExecute(
+  action: ProposedAction,
+  ctx: AgentContext,
+  sourceTabId: number | undefined
+): Promise<void> {
+  // 1) Record so it's visible in the activity log and appendLedger can attach
+  //    approval/result rows to it.
+  const proposedEntry = await recordProposed(action);
+  await broadcastLedger(proposedEntry);
+
+  // 2) Deterministic policy gate — same gate scan-proposed actions pass.
+  const verdict = await runPolicyAgent(action, ctx);
+  if (!verdict.allow) {
+    const blocked = await appendLedger({
+      proposedActionId: action.id,
+      executed: { ok: false, error: `blocked: ${verdict.reason ?? 'policy'}` },
+    });
+    if (blocked) await broadcastLedger(blocked);
+    await runAuditLedgerAgent(
+      { proposedActionId: action.id, outcome: 'blocked', detail: verdict.reason },
+      ctx
+    );
+    await broadcast({ kind: 'bg/error', message: `Blocked: ${verdict.reason ?? 'policy gate'}` });
+    return;
+  }
+
+  // 3) Record the (already-given) approval, then execute.
+  const approval: ApprovalRecord = {
+    proposedActionId: action.id,
+    status: 'approved',
+    approvedBy: 'user',
+    approvedAt: new Date().toISOString(),
+  };
+  const approvedEntry = await appendLedger({ proposedActionId: action.id, approval });
+  if (approvedEntry) await broadcastLedger(approvedEntry);
+  await recordTrace({
+    kind: 'approval_granted',
+    turnId: ctx.turnId,
+    data: { proposedActionId: action.id },
+  });
+
+  const result = await runActionExecutor({ action, approval, sourceTabId, ctx });
+  await runAuditLedgerAgent(
+    {
+      proposedActionId: action.id,
+      outcome: result.ok ? 'executed' : 'failed',
+      detail: result.error,
+    },
+    ctx
+  );
+}
+
+/** Push a ledger row to the side panel so the activity log updates live. */
+async function broadcastLedger(
+  entry: import('@schemas/index').ActionLedgerEntry
+): Promise<void> {
+  await broadcast({ kind: 'bg/ledger_entry', entry });
 }
 
 // ---------------- Memory agent ----------------
@@ -366,8 +439,18 @@ async function proposeAndGate(
     proposedAt: new Date().toISOString(),
   });
 
+  // Record first so EVERY proposed action — including ones the gate blocks —
+  // is visible in the user's activity log, not just a trace event.
+  const entry = await recordProposed(action);
+  await broadcastLedger(entry);
+
   const verdict = await runPolicyAgent(action, ctx);
   if (!verdict.allow) {
+    const blocked = await appendLedger({
+      proposedActionId: action.id,
+      executed: { ok: false, error: `blocked: ${verdict.reason ?? 'policy'}` },
+    });
+    if (blocked) await broadcastLedger(blocked);
     await recordTrace({
       kind: 'action_blocked',
       agent: AGENT_NAMES.policy,
@@ -386,7 +469,6 @@ async function proposeAndGate(
     return null;
   }
 
-  await recordProposed(action);
   // Surface as an approval request (typed handoff to UnsubscribeAgent — but
   // the user gates the actual execution).
   const approvalHandoff = makeHandoff(
@@ -438,24 +520,49 @@ async function runPolicyAgent(
   return decision;
 }
 
-// ---------------- Unsubscribe agent ----------------
+// ---------------- Action executor ----------------
 
-interface UnsubscribeAgentInput {
+interface ActionExecutorInput {
   action: ProposedAction;
   approval: ApprovalRecord;
   sourceTabId: number | undefined;
   ctx: AgentContext;
 }
 
-interface UnsubscribeAgentResult {
+interface ActionExecutorResult {
   ok: boolean;
   error?: string;
   dryRun: boolean;
 }
 
-async function runUnsubscribeAgent(
-  input: UnsubscribeAgentInput
-): Promise<UnsubscribeAgentResult> {
+/** Actions that change inbox state — these are skipped under dry-run. Reads and
+ *  navigation (open_email, highlight, scroll, find_unsubscribe_link) always run. */
+const MUTATING_TYPES = new Set<ProposedAction['type']>([
+  'click_unsubscribe',
+  'mark_read',
+  'archive',
+  'apply_label',
+]);
+
+/** Actions that need a resolved Gmail row/element selector to do anything. */
+const NEEDS_SELECTOR = new Set<ProposedAction['type']>([
+  'open_email',
+  'highlight_element',
+  'scroll_to_element',
+  'mark_read',
+  'archive',
+  'apply_label',
+]);
+
+/**
+ * Executes ANY approved action by handing it to the content script (which has a
+ * real implementation for each type). This replaced the unsubscribe-only
+ * executor that silently rejected open_email / mark_read / archive — the reason
+ * chat actions like "open this message" never actually happened.
+ */
+async function runActionExecutor(
+  input: ActionExecutorInput
+): Promise<ActionExecutorResult> {
   const { action, approval, sourceTabId, ctx } = input;
   const handoff = makeHandoff(
     AGENT_NAMES.orchestrator,
@@ -466,16 +573,26 @@ async function runUnsubscribeAgent(
   );
   await emitHandoff(handoff);
 
-  // Re-validate at the executor boundary; defense in depth.
-  if (action.type !== 'click_unsubscribe') {
-    return { ok: false, dryRun: ctx.dryRun, error: 'unsupported action type' };
+  // Defense in depth — validate the action can actually run before dispatching.
+  if (action.type === 'click_unsubscribe') {
+    const href = action.params['unsubscribeHref'];
+    if (typeof href !== 'string' || !/^https:\/\//.test(href)) {
+      return { ok: false, dryRun: ctx.dryRun, error: 'invalid unsubscribe href' };
+    }
   }
-  const href = action.params['unsubscribeHref'];
-  if (typeof href !== 'string' || !/^https:\/\//.test(href)) {
-    return { ok: false, dryRun: ctx.dryRun, error: 'invalid unsubscribe href' };
+  if (NEEDS_SELECTOR.has(action.type)) {
+    const sel = (action.params['rowSelector'] ?? action.params['selector']) as string | undefined;
+    if (typeof sel !== 'string' || !sel) {
+      return {
+        ok: false,
+        dryRun: ctx.dryRun,
+        error: "couldn't locate this email in the current Gmail view",
+      };
+    }
   }
 
-  if (ctx.dryRun) {
+  // Dry-run only suppresses state-changing actions.
+  if (ctx.dryRun && MUTATING_TYPES.has(action.type)) {
     await appendLedger({
       proposedActionId: action.id,
       executed: { ok: true, after: { dryRun: true } },
@@ -490,24 +607,26 @@ async function runUnsubscribeAgent(
     return { ok: true, dryRun: true };
   }
 
-  // Hand the action to the content script for execution. Errors here count as
-  // "failed approved attempts" — they still go to the ledger via AuditLedgerAgent.
+  // Hand the action to the content script for execution on the user's Gmail tab.
+  // The content script replies content/dom_action_result, which records the real
+  // outcome in the ledger; success here means "dispatched".
   try {
-    if (typeof chrome !== 'undefined' && sourceTabId === undefined) {
-      const [tab] = await chrome.tabs.query({ active: true, url: 'https://mail.google.com/*' });
-      if (tab?.id) {
-        await chrome.tabs.sendMessage(tab.id, { kind: 'bg/execute_dom_action', action });
-      } else {
+    if (typeof chrome !== 'undefined') {
+      let targetTab = sourceTabId;
+      if (targetTab === undefined) {
+        const [tab] = await chrome.tabs.query({ active: true, url: 'https://mail.google.com/*' });
+        targetTab = tab?.id;
+      }
+      if (targetTab === undefined) {
         return { ok: false, dryRun: false, error: 'no Gmail tab open' };
       }
-    } else if (sourceTabId !== undefined) {
-      await chrome.tabs.sendMessage(sourceTabId, { kind: 'bg/execute_dom_action', action });
+      await chrome.tabs.sendMessage(targetTab, { kind: 'bg/execute_dom_action', action });
     }
     await recordTrace({
       kind: 'action_executed',
       agent: AGENT_NAMES.unsubscribe,
       turnId: ctx.turnId,
-      data: { proposedActionId: action.id },
+      data: { proposedActionId: action.id, type: action.type },
     });
     return { ok: true, dryRun: false };
   } catch (err) {
@@ -748,7 +867,7 @@ export async function loadPreferenceContext() {
 export const __test = {
   proposeAndGate,
   runPolicyAgent,
-  runUnsubscribeAgent,
+  runActionExecutor,
   runAuditLedgerAgent,
   runMemoryAgent,
   filterDecisionsByPreferences,
