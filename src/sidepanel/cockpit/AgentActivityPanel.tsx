@@ -153,10 +153,19 @@ export function AgentActivityPanel(): JSX.Element {
     sub = 'Tap "Today" to review';
   } else if (scanStatus === 'done') {
     state = 'idle';
-    message = decisions.length
-      ? `${decisions.length} decision${decisions.length === 1 ? '' : 's'} for you today`
-      : 'All clear — nothing pressing';
-    sub = decisions.length ? 'Tap "Today" to see them' : 'I read your inbox and found no to-dos';
+    // Honest "work done on your behalf" — the real count we actually read this
+    // run, paired with the outcome. Replaces the debug line in App.tsx.
+    const read =
+      scanProgress.loaded > 0
+        ? `Read ${scanProgress.loaded} email${scanProgress.loaded === 1 ? '' : 's'}`
+        : '';
+    if (decisions.length) {
+      message = `${decisions.length} decision${decisions.length === 1 ? '' : 's'} for you today`;
+      sub = read ? `${read} · tap "Today" to see them` : 'Tap "Today" to see them';
+    } else {
+      message = 'All clear — nothing pressing';
+      sub = read ? `${read} · nothing needs you` : 'I read your inbox and found no to-dos';
+    }
   } else {
     // Idle / first run — fall back to the latest trace in plain language.
     if (latest && ERROR_KINDS.has(latest.kind)) state = 'error';
@@ -165,16 +174,26 @@ export function AgentActivityPanel(): JSX.Element {
     sub = latest ? `Last activity ${relativeTime(latest.at, nowMs)}` : 'Your inbox activity shows up here';
   }
 
+  // The timeline only earns a disclosure affordance when there's something to
+  // show — otherwise a click reveals an empty box (the confusing part).
+  const hasTimeline = events.length > 0;
+  // Recede when idle and nothing has happened for a while: calmer + smaller,
+  // never absent, and never while expanded. Working/attention/error stay full.
+  const lastAgeMs = latest ? nowMs - new Date(latest.at).getTime() : Infinity;
+  const recede = state === 'idle' && !open && lastAgeMs > 25_000;
+
+  const toggle = () => hasTimeline && setOpen((v) => !v);
+
   return (
     <>
       <section
-        className={`pulse ${state}`}
-        onClick={() => setOpen((v) => !v)}
-        role="button"
-        aria-expanded={open}
-        tabIndex={0}
+        className={`pulse ${state} ${recede ? 'idle-compact' : ''}`}
+        onClick={toggle}
+        role={hasTimeline ? 'button' : undefined}
+        aria-expanded={hasTimeline ? open : undefined}
+        tabIndex={hasTimeline ? 0 : undefined}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
+          if (hasTimeline && (e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault();
             setOpen((v) => !v);
           }
@@ -187,11 +206,18 @@ export function AgentActivityPanel(): JSX.Element {
         </div>
         <div className="pulse-content">
           <div className="pulse-message" key={message}>{message}</div>
-          <div className="pulse-sub">{sub}</div>
+          {!recede && <div className="pulse-sub">{sub}</div>}
         </div>
-        <span className={`pulse-chevron ${open ? 'open' : ''}`}>▾</span>
+        {hasTimeline && (
+          <span className={`pulse-toggle ${open ? 'open' : ''}`}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M4 6l4 4 4-4" />
+            </svg>
+            {open ? 'Hide' : 'Activity'}
+          </span>
+        )}
       </section>
-      {open && (
+      {open && hasTimeline && (
         <div className="pulse-trace">
           <AgentTraceTimeline events={events} grouped={false} />
         </div>

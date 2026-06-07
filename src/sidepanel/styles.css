@@ -364,13 +364,31 @@ button.icon.spinning svg { animation: spin 900ms linear infinite; }
   color: var(--text-faint);
   margin-top: 1px;
 }
-.pulse-chevron {
-  color: var(--text-faint);
-  font-size: 10px;
-  transition: transform 200ms var(--ease-out);
+/* Legible, labelled disclosure — replaces the near-invisible ▾ glyph. The whole
+   bar is still the click target (cursor + role=button); this pill just names
+   what a click reveals. */
+.pulse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
   position: relative; z-index: 1;
+  transition: background 180ms var(--ease-out), color 180ms var(--ease-out);
 }
-.pulse-chevron.open { transform: rotate(180deg); }
+.pulse:hover .pulse-toggle { background: var(--surface-3); color: var(--text); }
+.pulse-toggle svg { transition: transform 200ms var(--ease-out); }
+.pulse-toggle.open svg { transform: rotate(180deg); }
+
+/* Idle "alive" cue + receded chrome — the doc mandates the pulse decays when
+   nothing has happened for a while (calm, smaller), but it must never vanish. */
+.pulse.idle .pulse-core { animation: breathe 3.6s ease-in-out infinite; }
+.pulse.idle-compact { padding: 8px 14px; }
 
 .pulse-trace {
   margin: -4px 16px 10px;
@@ -378,8 +396,8 @@ button.icon.spinning svg { animation: spin 900ms linear infinite; }
   background: var(--surface);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  font-family: ui-monospace, SFMono-Regular, 'Menlo', monospace;
-  font-size: 11px;
+  font-family: inherit;
+  font-size: 12px;
   max-height: 220px;
   overflow: auto;
   animation: expand-down 260ms var(--ease-out);

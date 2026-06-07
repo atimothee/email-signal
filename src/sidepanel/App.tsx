@@ -26,7 +26,6 @@ export function App(): JSX.Element {
   const dryRun = usePanelStore((s) => s.dryRun);
   const lastError = usePanelStore((s) => s.lastError);
   const scanStatus = usePanelStore((s) => s.scanStatus);
-  const scanProgress = usePanelStore((s) => s.scanProgress);
 
   // Honest spinner: spins only while real work is happening (issue #7 fix).
   const scanning = scanStatus === 'reading' || scanStatus === 'thinking';
@@ -116,11 +115,6 @@ export function App(): JSX.Element {
       )}
 
       <main className="panel">
-        <div className="faint" style={{ padding: '4px 16px 0', fontFamily: 'monospace' }}>
-          debug: {scanStatus === 'reading'
-            ? `fetching ${scanProgress.loaded}${scanProgress.target ? `/${scanProgress.target}` : ''} emails…`
-            : `${scanProgress.loaded} emails fetched`}
-        </div>
         {lastError && <div className="danger-banner">{lastError}</div>}
         {overlay === 'history' ? (
           <OverlayWrapper title="Action history" onClose={() => setOverlay(null)}>
