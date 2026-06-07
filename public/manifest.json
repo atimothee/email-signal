@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Email Signal",
   "version": "0.1.0",
-  "description": "Distills your visible Gmail into a short list of decisions — what actually needs you today. Never deletes or sends mail.",
+  "description": "Distills your visible Gmail or Outlook into a short list of decisions — what actually needs you today. Never deletes or sends mail.",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "Email Signal",
@@ -22,7 +22,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://mail.google.com/*"],
+      "matches": [
+        "https://mail.google.com/*",
+        "https://outlook.live.com/*",
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*"
+      ],
       "js": ["src/content/index.ts"],
       "css": ["src/content/highlight.css"],
       "run_at": "document_idle"
@@ -38,6 +43,9 @@
   ],
   "host_permissions": [
     "https://mail.google.com/*",
+    "https://outlook.live.com/*",
+    "https://outlook.office.com/*",
+    "https://outlook.office365.com/*",
     "http://localhost:3030/*",
     "http://127.0.0.1:3030/*"
   ],

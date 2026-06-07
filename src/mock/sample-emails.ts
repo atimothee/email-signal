@@ -1,4 +1,4 @@
-import { EmailCandidate, EmailCandidateSchema, ScanResult } from '@schemas/index';
+import { EmailCandidate, EmailCandidateSchema, Provider, ScanResult } from '@schemas/index';
 
 /** Deterministic fixture used for tests, evals, and the "Mock mode" toggle. */
 function mk(
@@ -6,12 +6,13 @@ function mk(
   from: { name?: string; email: string },
   subject: string,
   snippet: string,
-  extras: Partial<EmailCandidate> = {}
+  extras: Partial<EmailCandidate> = {},
+  provider: Provider = 'gmail'
 ): EmailCandidate {
   return EmailCandidateSchema.parse({
     id,
     threadId: id,
-    provider: 'gmail',
+    provider,
     from,
     subject,
     snippet,
@@ -77,6 +78,50 @@ export const SAMPLE_CANDIDATES: EmailCandidate[] = [
     'Call when you get a chance',
     'Just wanted to hear how things are going. Love you.',
     { hasUnsubscribeLink: false }
+  ),
+  // Outlook fixtures (#4 / #60). Real OWA-shaped candidates so evals cover the
+  // second provider end-to-end — including the "Other" focused-inbox tag that
+  // the Outlook scraper surfaces in `labels` and the `?ItemID=` thread locator
+  // shape used to re-open conversations in the reading pane.
+  mk(
+    'o-pay-1',
+    { name: 'Microsoft 365 billing', email: 'msft-noreply@microsoft.com' },
+    'Your Microsoft 365 subscription renews on June 15',
+    'Your annual subscription ($99.99) will auto-renew on 6/15/2026. Update payment if needed.',
+    {
+      hasUnsubscribeLink: false,
+      labels: ['focused'],
+      threadLocator: '?ItemID=AAQkADAwATM2Y2EzZDhh',
+    },
+    'outlook'
+  ),
+  mk(
+    'o-cal-1',
+    {
+      name: 'Outlook Calendar',
+      email: 'calendar-noreply@outlook.com',
+    },
+    'Accept: 1:1 with Priya — Tuesday 3:00 PM',
+    'Priya invited you to a 30-minute meeting on Tue, Jun 9 at 3:00 PM. Tentative until you respond.',
+    {
+      hasUnsubscribeLink: false,
+      labels: ['focused'],
+      threadLocator: '?ItemID=AAQkADAwAcalfix',
+    },
+    'outlook'
+  ),
+  mk(
+    'o-other-1',
+    { name: 'LinkedIn Notifications', email: 'notifications-noreply@linkedin.com' },
+    '5 new posts from people you follow',
+    'Catch up on what your network shared this week. Updates from 3 connections.',
+    {
+      hasUnsubscribeLink: true,
+      unsubscribeLinkHrefs: ['https://www.linkedin.com/comm/notifications/unsubscribe?x=1'],
+      labels: ['other'],
+      threadLocator: '?ItemID=AAQkADAwAlinkedin1',
+    },
+    'outlook'
   ),
 ];
 

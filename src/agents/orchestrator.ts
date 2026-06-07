@@ -31,6 +31,7 @@ import {
 import { classifyViaSidecar, chatViaSidecar } from './llm-runner';
 import { log } from '@/common/log';
 import { STORAGE_KEYS } from '@/common/constants';
+import { ALL_PROVIDER_MATCH_PATTERNS } from '@/providers/url-patterns';
 
 interface OrchestratorTurnInput {
   trigger: 'scan' | 'brief' | 'chat' | 'approval' | 'execute' | 'periodic';
@@ -657,11 +658,17 @@ async function runActionExecutor(
     if (typeof chrome !== 'undefined') {
       let targetTab = sourceTabId;
       if (targetTab === undefined) {
-        const [tab] = await chrome.tabs.query({ active: true, url: 'https://mail.google.com/*' });
+        // Prefer the currently-active mail tab so the action runs against
+        // whatever the user is looking at; fall back to the first mail tab
+        // we can find (Gmail OR Outlook — the manifest matches both).
+        let [tab] = await chrome.tabs.query({ active: true, url: ALL_PROVIDER_MATCH_PATTERNS });
+        if (!tab) {
+          [tab] = await chrome.tabs.query({ url: ALL_PROVIDER_MATCH_PATTERNS });
+        }
         targetTab = tab?.id;
       }
       if (targetTab === undefined) {
-        return { ok: false, dryRun: false, error: 'no Gmail tab open' };
+        return { ok: false, dryRun: false, error: 'no mail tab open' };
       }
       await chrome.tabs.sendMessage(targetTab, { kind: 'bg/execute_dom_action', action });
     }

@@ -55,12 +55,67 @@ function scrapeGmail(): AccountIdentity | null {
   return parsed.success ? parsed.data : { provider: 'gmail', email, displayName };
 }
 
+/**
+ * Outlook (OWA) identity. The most stable anchor is the top-right account
+ * button — its aria-label embeds the signed-in name + email on every OWA
+ * release we've seen, e.g.:
+ *   "Account manager for First Last (you@outlook.com)"
+ *   "Account manager for First Last <you@contoso.com>"
+ * The avatar `img` inside it (when present) is the profile photo. We fall
+ * back to a couple of localized variants if Microsoft renames the button.
+ */
+function scrapeOutlook(): AccountIdentity | null {
+  const btn =
+    document.querySelector<HTMLElement>('button[aria-label*="Account manager" i]') ??
+    document.querySelector<HTMLElement>('div[role="button"][aria-label*="Account manager" i]') ??
+    document.querySelector<HTMLElement>('button[aria-label*="signed in" i]') ??
+    document.querySelector<HTMLElement>('[data-automation-id="O365_MainLink_Me"]');
+  if (!btn) return null;
+
+  const label = btn.getAttribute('aria-label') ?? '';
+  const email = label.match(EMAIL_RE)?.[0];
+  if (!email) return null;
+
+  // The display name is whatever's between "Account manager for" (or
+  // localized variant) and the parenthesized address. Strip the address
+  // itself, the wrapping parens, and any trailing "signed in" text.
+  let displayName: string | undefined;
+  const nameMatch = label.match(/(?:for|de|für|pour)\s+(.+?)\s*[(<\n]/i);
+  if (nameMatch?.[1]) {
+    displayName = nameMatch[1].trim() || undefined;
+  } else {
+    // Fallback: take everything up to the first '(' or '<', then strip the
+    // generic prefix ourselves.
+    const cleaned = label.replace(EMAIL_RE, '').replace(/[()<>]/g, '').trim();
+    displayName =
+      cleaned
+        .replace(/^(account manager|account|signed in as|for)\s*/i, '')
+        .trim() || undefined;
+  }
+
+  const img = btn.querySelector('img');
+  let photoUrl = img?.getAttribute('src') ?? undefined;
+  if (photoUrl && !/^https?:/i.test(photoUrl)) photoUrl = undefined;
+  if (!displayName) {
+    const alt = img?.getAttribute('alt')?.trim();
+    if (alt && !EMAIL_RE.test(alt)) displayName = alt;
+  }
+
+  const parsed = AccountIdentitySchema.safeParse({
+    provider: 'outlook',
+    email,
+    displayName,
+    photoUrl,
+  });
+  return parsed.success ? parsed.data : { provider: 'outlook', email, displayName };
+}
+
 export function scrapeAccountIdentity(): AccountIdentity | null {
   switch (currentProvider()) {
     case 'gmail':
       return scrapeGmail();
-    // 'outlook' is not yet in the manifest match list — placeholder for the
-    // multi-account work (#5). The provider icon already renders for it.
+    case 'outlook':
+      return scrapeOutlook();
     default:
       return null;
   }
