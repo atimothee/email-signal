@@ -7,6 +7,7 @@ import {
   ClutterFinding,
   Decision,
   DecisionSchema,
+  UserPreference,
 } from '../src/schemas/index.js';
 import { AGENT_NAMES, INSTRUCTIONS } from '../src/agents/agent-defs.js';
 import { resolveSenderName, domainOf } from '../src/common/sender.js';
@@ -16,6 +17,7 @@ import {
   getCachedClassification,
   setCachedClassification,
 } from './cache.js';
+import { recallAndMergePreferences } from './memory.js';
 
 const MODEL = process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini';
 
@@ -125,6 +127,13 @@ interface ClassifyInput {
    * before it touches Redis — never stored in the clear.
    */
   account?: string;
+  /**
+   * User preferences recalled client-side (chrome.storage). Merged with the
+   * account's Redis-stored preferences and fed into synthesis so the user's
+   * standing instructions ("ignore this sender", "this topic matters") shape the
+   * decisions. Also folded into the cache key so a preference change busts it.
+   */
+  preferences?: UserPreference[];
 }
 
 export interface ClassifyOutput {
@@ -208,11 +217,17 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     return c ? resolveSenderName(c.from, domainOf(c.from.email)) : 'Unknown sender';
   };
 
-  // ── 0) Exact-match cache ──
-  // A rescan of an unchanged inbox is the same (account, id-set) → replay the
-  // derived result instead of re-running ~20 OpenAI calls. Miss/disabled →
-  // fall straight through to the live pipeline below.
-  const cacheKey = classifyCacheKey(account, candidates);
+  // ── 0) Agent Memory: recall + merge the user's preferences ──
+  // The client forwards what it has (chrome.storage); we union that with the
+  // account's Redis-stored preferences (cross-device) and mirror new ones back.
+  // The merged set both feeds synthesis and fingerprints the cache key.
+  const preferences = await recallAndMergePreferences(account, input.preferences ?? []);
+
+  // ── 1) Exact-match cache ──
+  // A rescan of an unchanged inbox under unchanged preferences is the same
+  // (account, id-set, prefs) → replay the derived result instead of re-running
+  // ~20 OpenAI calls. Miss/disabled → fall straight through to the live pipeline.
+  const cacheKey = classifyCacheKey(account, candidates, preferences);
   const cached = await getCachedClassification(cacheKey);
   if (cached) {
     await emit(writer, sessionId, turnId, {
@@ -284,6 +299,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   const noiseIds = new Set(clutter.filter((f) => NOISE_CATEGORIES.has(f.category)).map((f) => f.emailId));
   const signal = candidates.filter((c) => !noiseIds.has(c.id));
 
+  const prefsBlock = formatPreferencesForSynthesis(preferences);
+
   let drafts: DecisionOut[] = [];
   if (signal.length > 0) {
     const decisionBatches = chunk(signal, BATCH_SIZE);
@@ -297,7 +314,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     }
     const settled = await Promise.allSettled(
       decisionBatches.map((batch, idx) =>
-        run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.\n${slimForDecisions(batch, friendlyName)}`)
+        run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`)
           .catch((reason) => {
             void emit(writer, sessionId, turnId, { kind: 'error', agent: 'DecisionSynthesizerAgent', message: `synthesis batch ${idx + 1}: ${formatRunError(reason)}` });
             throw reason;
@@ -331,6 +348,40 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
 
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
   return result;
+}
+
+// ── preferences → synthesis directive ──
+
+/**
+ * Turn the user's standing preferences into a compact instruction block the
+ * synthesizer must honour. Returns '' when there are none, so the prompt is
+ * unchanged for users who've set nothing.
+ */
+function formatPreferencesForSynthesis(prefs: UserPreference[]): string {
+  if (!prefs.length) return '';
+  const byKind = (kind: UserPreference['kind']): string[] =>
+    prefs.filter((p) => p.kind === kind).map((p) => String(p.value)).filter(Boolean);
+
+  const lines: string[] = [];
+  const important = byKind('important_sender');
+  const ignored = byKind('ignored_sender');
+  const liked = byKind('liked_newsletter');
+  const topics = byKind('important_topic');
+  const timeSensitive = byKind('time_sensitive_category');
+
+  if (important.length)
+    lines.push(`- ALWAYS surface mail from these senders/domains and rank it higher: ${important.join(', ')}.`);
+  if (ignored.length)
+    lines.push(`- NEVER surface mail from these senders/domains — do not create a decision for them: ${ignored.join(', ')}.`);
+  if (topics.length)
+    lines.push(`- The user cares about these topics; weight related mail up: ${topics.join(', ')}.`);
+  if (timeSensitive.length)
+    lines.push(`- Treat these categories as time-sensitive (raise urgency): ${timeSensitive.join(', ')}.`);
+  if (liked.length)
+    lines.push(`- The user values these newsletters; you MAY surface them only if genuinely actionable: ${liked.join(', ')}.`);
+
+  if (!lines.length) return '';
+  return `\n\nUSER PREFERENCES (these are standing instructions — honour them strictly):\n${lines.join('\n')}`;
 }
 
 // ── payload builders ──
