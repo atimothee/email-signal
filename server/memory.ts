@@ -21,7 +21,8 @@ import type { UserPreference } from '../src/schemas/index.js';
  */
 
 type RedisLike = {
-  hvals(key: string): Promise<string[]>;
+  hkeys(key: string): Promise<string[]>;
+  hdel(key: string, ...fields: string[]): Promise<unknown>;
   hset(key: string, field: string, value: string): Promise<unknown>;
 };
 
@@ -41,6 +42,7 @@ function getClient(): Promise<RedisLike | null> {
         lazyConnect: true,
         maxRetriesPerRequest: 1,
         enableOfflineQueue: false,
+        connectTimeout: 2000,
       });
       client.on('error', () => {
         /* surfaced by the classify cache; stay quiet here to avoid double logs */
@@ -71,13 +73,24 @@ function prefIdentity(p: UserPreference): string {
 }
 
 /**
- * Persist the client's preferences to Redis and return the union of those plus
- * anything already stored for the account. The client copy wins on conflicts
- * (it's the freshest), but Redis fills in preferences set on another device.
+ * Mirror the client's preferences into Redis and return the authoritative set.
  *
- * On a miss / disabled Redis, returns the client list unchanged.
+ * The extension's chrome.storage is the source of truth and forwards its FULL
+ * preference set on every scan, so a removal shows up as ABSENCE from the list.
+ * We therefore RECONCILE Redis to that snapshot — deleting fields the client no
+ * longer has — rather than unioning (a union would resurrect deleted prefs
+ * forever, and they'd keep shaping synthesis and the cache key).
+ *
+ * The return value is exactly the client snapshot: it's the freshest truth, and
+ * the cache key / synthesis must reflect what the user currently wants.
+ *
+ * NOTE: true additive cross-device merge (pick up a pref set on another device
+ * without resurrecting one deleted here) needs per-pref tombstones/timestamps —
+ * deferred deliberately. Today Redis is a durable mirror of one client's state.
+ *
+ * Best-effort: a missing/unreachable Redis is a no-op and returns clientPrefs.
  */
-export async function recallAndMergePreferences(
+export async function reconcilePreferences(
   account: string | undefined,
   clientPrefs: UserPreference[]
 ): Promise<UserPreference[]> {
@@ -85,34 +98,19 @@ export async function recallAndMergePreferences(
   if (!client) return clientPrefs;
 
   const key = prefKey(account);
-  const byIdentity = new Map<string, UserPreference>();
-
-  // Start from what Redis already knows.
+  const wanted = new Set(clientPrefs.map(prefIdentity));
   try {
-    const stored = await client.hvals(key);
-    for (const raw of stored) {
-      try {
-        const p = JSON.parse(raw) as UserPreference;
-        byIdentity.set(prefIdentity(p), p);
-      } catch {
-        /* skip a corrupt record */
-      }
+    // Drop anything Redis still holds that the client has since removed.
+    const existing = await client.hkeys(key);
+    const stale = existing.filter((f) => !wanted.has(f));
+    if (stale.length) await client.hdel(key, ...stale);
+    // Upsert the current set.
+    for (const p of clientPrefs) {
+      await client.hset(key, prefIdentity(p), JSON.stringify(p));
     }
   } catch {
-    // Redis unreadable mid-flight — fall back to the client list.
-    return clientPrefs;
+    /* best-effort mirror; client snapshot is still authoritative */
   }
 
-  // Client copy wins; mirror any new/updated client prefs back into Redis.
-  for (const p of clientPrefs) {
-    const id = prefIdentity(p);
-    byIdentity.set(id, p);
-    try {
-      await client.hset(key, id, JSON.stringify(p));
-    } catch {
-      /* best-effort write */
-    }
-  }
-
-  return Array.from(byIdentity.values());
+  return clientPrefs;
 }
