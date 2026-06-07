@@ -17,6 +17,7 @@ import {
   EmailCandidateSchema,
 } from '../src/schemas/index.js';
 import { runAgentClassification, runAgentChat, initServerWeave } from './agents.js';
+import { cacheStatus, initCache } from './cache.js';
 import type { SseWriter } from './trace-bridge.js';
 
 const PORT = Number(process.env['EMAIL_SIGNAL_PORT'] ?? 3030);
@@ -44,6 +45,7 @@ app.get('/health', (c) =>
     hasOpenAIKey: !!process.env['OPENAI_API_KEY'],
     hasWeaveKey: !!process.env['WANDB_API_KEY'],
     weaveProject: process.env['WANDB_PROJECT'] ?? null,
+    cache: cacheStatus(),
   })
 );
 
@@ -52,6 +54,8 @@ const ClassifyBody = z.object({
   candidates: z.array(EmailCandidateSchema).min(1).max(1000),
   /** OpenAI key forwarded from the extension Settings; used here, never sent on. */
   apiKey: z.string().optional(),
+  /** Signed-in mail address; namespaces the classify cache (hashed before use). */
+  account: z.string().optional(),
 });
 
 // ---- Classify + synthesize (SSE) ----
@@ -68,7 +72,7 @@ app.post('/orchestrate/classify', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
   }
-  const { turnId = nanoid(), candidates, apiKey } = parsed.data;
+  const { turnId = nanoid(), candidates, apiKey, account } = parsed.data;
 
   return streamSSE(c, async (stream) => {
     const writer: SseWriter = {
@@ -77,7 +81,7 @@ app.post('/orchestrate/classify', async (c) => {
       },
     };
     try {
-      const result = await runAgentClassification({ turnId, candidates, writer, apiKey });
+      const result = await runAgentClassification({ turnId, candidates, writer, apiKey, account });
       await writer.send('classification', { clutter: result.clutter });
       await writer.send('decisions', { decisions: result.decisions });
       await writer.send('done', { ok: true });
@@ -167,6 +171,7 @@ app.all('/copilotkit', async (c) => {
 void initServerWeave().catch((err) =>
   console.warn('[emailsignal-server] weave init failed', err)
 );
+initCache();
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   // eslint-disable-next-line no-console

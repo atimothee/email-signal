@@ -10,6 +10,20 @@ import { AGENT_NAMES } from './agent-defs';
 import { recordTrace } from '@/weave/tracing';
 import { sseFetch, isServerHealthy } from '@/common/server-client';
 import { getOpenAIKey } from './runtime';
+import { STORAGE_KEYS } from '@/common/constants';
+import { AccountIdentitySchema } from '@schemas/index';
+
+/**
+ * The signed-in mail address (scraped, no OAuth). Sent to the sidecar only to
+ * namespace its classify cache so two accounts never share cached results.
+ * Returns undefined when no account has been scraped yet.
+ */
+async function getAccountEmail(): Promise<string | undefined> {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return undefined;
+  const v = await chrome.storage.local.get(STORAGE_KEYS.account);
+  const parsed = AccountIdentitySchema.safeParse(v[STORAGE_KEYS.account]);
+  return parsed.success ? parsed.data.email : undefined;
+}
 
 /**
  * The extension is a THIN client. All intelligence — clutter classification and
@@ -56,10 +70,11 @@ export async function classifyViaSidecar(
   candidates: EmailCandidate[]
 ): Promise<ClassifyResult> {
   const apiKey = await preflight();
+  const account = await getAccountEmail();
   const clutter: ClutterFinding[] = [];
   const decisions: Decision[] = [];
 
-  for await (const ev of sseFetch('/orchestrate/classify', { turnId, candidates, apiKey })) {
+  for await (const ev of sseFetch('/orchestrate/classify', { turnId, candidates, apiKey, account })) {
     if (ev.type === 'trace') {
       const parsed = AgentTraceEventSchema.safeParse(ev.data);
       if (parsed.success) await recordTrace(parsed.data);
