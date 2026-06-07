@@ -38,7 +38,7 @@ export default function HomePage() {
             applicationCategory: "BrowserApplication",
             operatingSystem: "Chrome (Desktop)",
             description:
-              "A Chrome extension that reads only the Gmail you can see and turns the noise into a short list of decisions. Never sends or deletes. Open source.",
+              "A Chrome extension that reads only the Gmail or Outlook you can see and turns the noise into a short list of decisions. Never sends or deletes. Open source.",
             offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
             url: SITE.url,
             installUrl: `${SITE.url}/install`,

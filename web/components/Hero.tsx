@@ -20,7 +20,7 @@ export function Hero() {
           >
             <PulseDot tone="accent" />
             <span>
-              For Gmail · Reads what you can see · Never sends or deletes
+              For Gmail &amp; Outlook · Reads what you can see · Never sends or deletes
             </span>
           </motion.div>
 
@@ -40,9 +40,9 @@ export function Hero() {
             transition={{ duration: 0.6, delay: 0.15 }}
             className="mx-auto mt-6 max-w-xl text-balance text-[16px] leading-relaxed text-text-dim sm:text-[18px]"
           >
-            EmailSignal reads the Gmail you have open and turns 80-something
-            unread into a short list of decisions — in your own voice, with the
-            why and the next step attached.
+            EmailSignal reads the Gmail or Outlook you have open and turns
+            hundreds of unread emails into a short list of decisions — in your
+            own voice, with the why and the next step attached.
           </motion.p>
 
           <motion.div

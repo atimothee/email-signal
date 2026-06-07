@@ -17,7 +17,7 @@ export const SITE = {
   name: "EmailSignal",
   tagline: "The few things that need you today. Nothing else.",
   description:
-    "A Chrome extension that turns your noisy Gmail into a short list of decisions. Reads only what you can see. Never sends or deletes anything. Every action passes through your approval.",
+    "A Chrome extension that turns your noisy Gmail or Outlook inbox into a short list of decisions. Reads only what you can see. Never sends or deletes anything. Every action passes through your approval.",
   url: "https://emailsignal.app",
   twitter: "@emailsignal",
   githubUrl: "https://github.com/atimothee/email-signal",

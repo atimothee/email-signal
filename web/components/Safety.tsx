@@ -27,8 +27,8 @@ const GUARANTEES = [
     body: "It opens the link with safe browser flags. You decide whether to confirm. No forms entered, no credentials touched.",
   },
   {
-    title: "No Google login. No OAuth. No Gmail API.",
-    body: "It reads the Gmail web page you have open, the same way you do. Your account and credentials never leave your browser.",
+    title: "No Google or Microsoft login. No OAuth. No Gmail API or Graph.",
+    body: "It reads the Gmail or Outlook web page you have open, the same way you do. Your account and credentials never leave your browser.",
   },
 ];
 

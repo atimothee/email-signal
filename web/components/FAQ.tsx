@@ -11,12 +11,16 @@ type QA = { q: string; a: React.ReactNode };
 
 const FAQS: QA[] = [
   {
-    q: "Can it read my whole Google account?",
+    q: "Can it read my whole Google or Microsoft account?",
     a: (
       <>
-        No. It only sees the Gmail tab you have open — the same thing your eyes
-        see. There&apos;s no Google login, no OAuth, no Gmail API. The extension
-        only has permission for <code className="rounded bg-surface-2 px-1.5 py-0.5 text-[12px]">mail.google.com</code>;
+        No. It only sees the Gmail or Outlook tab you have open — the same
+        thing your eyes see. There&apos;s no Google or Microsoft login, no
+        OAuth, no Gmail API, no Microsoft Graph. The extension only has
+        permission for{" "}
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 text-[12px]">mail.google.com</code>,{" "}
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 text-[12px]">outlook.live.com</code>, and{" "}
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 text-[12px]">outlook.office.com</code>;
         every other tab is invisible to it.
       </>
     ),
@@ -79,7 +83,16 @@ const FAQS: QA[] = [
   },
   {
     q: "Does it work with Outlook?",
-    a: <>Gmail today. Outlook support is on the roadmap, not in the build.</>,
+    a: (
+      <>
+        Yes — Gmail and Outlook are both supported. The same DOM-only approach
+        works on{" "}
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 text-[12px]">outlook.live.com</code>,{" "}
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 text-[12px]">outlook.office.com</code>, and{" "}
+        <code className="rounded bg-surface-2 px-1.5 py-0.5 text-[12px]">outlook.office365.com</code>{" "}
+        (consumer + Microsoft 365). No Microsoft Graph, no OAuth.
+      </>
+    ),
   },
   {
     q: "What happens if there&apos;s nothing for me to do?",
