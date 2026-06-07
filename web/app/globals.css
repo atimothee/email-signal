@@ -1,0 +1,214 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ----------------------------------------------------------------------------
+ * Design tokens. The page borrows the product's design language:
+ * cobalt blue accent, dark surface stack, soft chips, generous breathing room.
+ * Dark mode is the default; a light mode mirror is provided for accessibility.
+ * ---------------------------------------------------------------------------- */
+@layer base {
+  :root {
+    /* Dark (default) */
+    --bg: 10 14 26;
+    --surface: 26 34 54;
+    --surface-2: 35 45 68;
+    --surface-3: 46 58 85;
+    --border: 255 255 255;            /* used with alpha */
+    --border-strong: 255 255 255;
+    --accent: 77 158 255;
+    --accent-strong: 122 182 255;
+    --text: 243 245 250;
+    --text-dim: 168 180 204;
+    --text-faint: 120 134 161;
+    --success: 94 214 163;
+    --warn: 255 186 86;
+    --danger: 255 110 110;
+
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+    --font-display: var(--font-sans);
+  }
+
+  .light {
+    --bg: 247 248 252;
+    --surface: 255 255 255;
+    --surface-2: 240 244 251;
+    --surface-3: 226 233 245;
+    --border: 17 24 39;
+    --border-strong: 17 24 39;
+    --accent: 39 110 217;
+    --accent-strong: 28 88 180;
+    --text: 17 24 39;
+    --text-dim: 71 85 105;
+    --text-faint: 120 134 161;
+  }
+
+  html {
+    color-scheme: dark;
+    scroll-behavior: smooth;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-bg text-text font-sans antialiased;
+    background-color: rgb(var(--bg));
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.35);
+    color: rgb(var(--text));
+  }
+
+  /* Custom focus ring — accessible without being noisy. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent) / 0.8);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
+@layer components {
+  /* Soft card surface used across sections. */
+  .es-card {
+    background: rgb(var(--surface));
+    border: 1px solid rgb(var(--border) / 0.09);
+    border-radius: 14px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  }
+  .es-card-2 {
+    background: rgb(var(--surface-2));
+    border: 1px solid rgb(var(--border) / 0.07);
+    border-radius: 12px;
+  }
+
+  /* Generic chip. */
+  .es-chip {
+    @apply inline-flex items-center gap-1.5 rounded-pill px-2.5 py-1 text-[11px] font-medium;
+    background: rgb(var(--surface-2));
+    color: rgb(var(--text-dim));
+  }
+  .es-chip-accent {
+    background: rgb(var(--accent) / 0.18);
+    color: rgb(var(--accent-strong));
+  }
+  .es-chip-warn {
+    background: rgb(var(--warn) / 0.16);
+    color: rgb(var(--warn));
+  }
+  .es-chip-danger {
+    background: rgb(var(--danger) / 0.16);
+    color: rgb(var(--danger));
+  }
+  .es-chip-success {
+    background: rgb(var(--success) / 0.16);
+    color: rgb(var(--success));
+  }
+
+  /* Section label — small uppercase orienting chip. */
+  .es-section-label {
+    @apply inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-faint;
+  }
+
+  /* Primary button (the one CTA per surface). */
+  .es-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-pill px-5 py-3 text-[14px] font-semibold transition-all;
+    background: rgb(var(--accent));
+    color: white;
+    box-shadow: 0 10px 30px -10px rgb(var(--accent) / 0.7);
+  }
+  .es-btn:hover {
+    background: rgb(var(--accent-strong));
+    transform: translateY(-1px);
+  }
+  .es-btn:active {
+    transform: translateY(0);
+  }
+
+  .es-btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-pill px-5 py-3 text-[14px] font-medium transition-colors;
+    background: transparent;
+    color: rgb(var(--text-dim));
+    border: 1px solid rgb(var(--border) / 0.16);
+  }
+  .es-btn-ghost:hover {
+    color: rgb(var(--text));
+    border-color: rgb(var(--border) / 0.26);
+    background: rgb(var(--surface) / 0.6);
+  }
+
+  /* Ambient body glow — two slow-drifting radial gradients in brand blue.
+   * Part of the "alive even when idle" feel from design-guidelines.md. */
+  .es-ambient {
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+  }
+  .es-ambient::before,
+  .es-ambient::after {
+    content: "";
+    position: absolute;
+    width: 60vw;
+    height: 60vw;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.16;
+  }
+  .es-ambient::before {
+    top: -10vw;
+    left: -15vw;
+    background: radial-gradient(circle, rgb(var(--accent)) 0%, transparent 60%);
+    animation: drift 22s ease-in-out infinite;
+  }
+  .es-ambient::after {
+    bottom: -20vw;
+    right: -10vw;
+    width: 70vw;
+    height: 70vw;
+    opacity: 0.10;
+    background: radial-gradient(circle, rgb(var(--accent-strong)) 0%, transparent 60%);
+    animation: drift 28s ease-in-out infinite;
+  }
+
+  /* Honest "shimmer" highlight on the accent text. */
+  .es-shimmer-text {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--text)) 0%,
+      rgb(var(--accent-strong)) 40%,
+      rgb(var(--text)) 70%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 9s linear infinite;
+  }
+
+  /* Soft hairline divider. */
+  .es-hr {
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent,
+      rgb(var(--border) / 0.12),
+      transparent
+    );
+  }
+}
+
+/* prefers-reduced-motion: respect it everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
