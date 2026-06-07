@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="tile" cx="50%" cy="42%" r="72%">
+      <stop offset="0%" stop-color="#2f78de"/>
+      <stop offset="55%" stop-color="#1b56b4"/>
+      <stop offset="100%" stop-color="#0a2f6b"/>
+    </radialGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3.8"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="url(#tile)"/>
+  <circle cx="32" cy="32" r="8" fill="rgba(173,210,255,0.4)" filter="url(#glow)"/>
+  <circle cx="32" cy="32" r="16.6" fill="none" stroke="#d4e6ff" stroke-opacity="0.78" stroke-width="1.6"/>
+  <circle cx="32" cy="32" r="7" fill="#f2f7ff"/>
+</svg>
