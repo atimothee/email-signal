@@ -61,5 +61,36 @@ export const DecisionSchema = z.object({
   confidence: z.number().min(0).max(1).default(0.7),
   /** DOM selector for "Show in Gmail" on the first email, when known. */
   rowSelector: z.string().nullable().optional(),
+
+  // ── Temporal intelligence ──────────────────────────────────────────────
+  // The action's time character, so recency can be reasoned about correctly:
+  // a `deadline` stays open until done (an old unpaid bill is MORE urgent with
+  // age), whereas an `event` simply passes (a viewing/flight that already
+  // happened is dead). Model-provided.
+  windowType: z.enum(['deadline', 'event', 'standing', 'none']).default('none'),
+  /**
+   * True ONLY on explicit in-thread evidence the action is already done
+   * (a later "paid"/"confirmed"/"thanks, done" or the user's own reply).
+   * Absence of evidence is NOT resolution. Model-provided.
+   */
+  resolved: z.boolean().default(false),
+  /**
+   * Received date (ISO) of the most recent email folded into this decision —
+   * for recency display and ranking. Null when the scan couldn't read a date
+   * (treated as recent, never as old). Server-filled.
+   */
+  receivedAt: z.string().nullable().optional(),
+  /**
+   * Server-computed: this decision was DEMOTED to the quiet "likely past —
+   * handled?" group (stale, a passed event, or resolved). It is never hidden,
+   * only sunk one tap away — hiding a live item is worse than surfacing a dead
+   * one, so demotion only ever reorders.
+   */
+  demoted: z.boolean().default(false),
+  /**
+   * Short, hedged reason shown on a demoted card, e.g.
+   * "from 3 weeks ago — likely already handled". Null when not demoted.
+   */
+  demotedReason: z.string().nullable().optional(),
 });
 export type Decision = z.infer<typeof DecisionSchema>;
