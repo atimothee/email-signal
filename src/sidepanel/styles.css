@@ -141,8 +141,8 @@ button.icon.active {
 button.icon.spinning svg { animation: spin 900ms linear infinite; }
 
 .app {
-  display: grid;
-  grid-template-rows: auto auto auto 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   position: relative;
 }
@@ -428,6 +428,8 @@ button.icon.spinning svg { animation: spin 900ms linear infinite; }
 
 /* Panel */
 .panel {
+  flex: 1;
+  min-height: 0;
   padding: 4px 16px 18px;
   overflow: auto;
 }
@@ -541,16 +543,41 @@ button.icon.spinning svg { animation: spin 900ms linear infinite; }
 .pill.success { background: var(--success-soft); color: var(--success); }
 .pill.warn { background: var(--warn-soft); color: var(--warn); }
 
-/* Chat — CopilotKit drives the surface; just give it room and theming. */
+/* Chat — CopilotKit drives the surface; give it room and dark-theme its vars. */
 .chat-tab {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 480px;
+
+  /* Map CopilotKit's theme variables onto the app palette so the kit
+     renders dark instead of its light defaults. */
+  --copilot-kit-background-color: transparent;
+  --copilot-kit-contrast-color: var(--text);
+  --copilot-kit-primary-color: var(--accent);
+  --copilot-kit-secondary-color: var(--surface-2);
+  --copilot-kit-secondary-contrast-color: var(--text);
+  --copilot-kit-input-background-color: var(--surface);
+  --copilot-kit-muted-color: var(--text-faint);
+  --copilot-kit-separator-color: var(--border);
+  --copilot-kit-shadow-sm: var(--shadow-card);
+  --copilot-kit-shadow-md: var(--shadow-card);
+  --copilot-kit-shadow-lg: var(--shadow-pop);
 }
 .chat-tab .copilotKitChat {
   background: transparent;
   border: none;
+}
+/* Suggestion pills: readable on the dark surface, accent on hover. */
+.chat-tab .suggestions button {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.chat-tab .suggestions button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 /* Inputs */
