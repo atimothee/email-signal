@@ -1,82 +1,115 @@
 # EmailSignal
 
-> Multi-agent, human-in-the-loop Gmail assistant — runs as a Chrome extension. Reads only what you can see in Gmail. Never deletes or sends mail. Every action passes through an approval card.
+> A Gmail "signal extractor" — runs as a Chrome extension backed by a small local Node sidecar. Reads only what you can see in Gmail. Never deletes or sends mail. Every action passes through an approval card.
 
-EmailSignal is a V1 reference build of an "inbox cockpit": specialized agents scan visible Gmail, classify clutter, surface priority emails, and propose actions (unsubscribe, mark-read, archive) that **only execute after you click Approve**. It is designed so that you can audit every step in a live "Agent activity" panel and every action in a permanent ledger.
+EmailSignal turns a noisy inbox into a short list of **Decisions** — the few things you actually need to act on today, each one synthesized from one *or more* related emails. It is the opposite of a second inbox: it does not restate what Gmail already shows. Two recruiters waiting on you become **one** decision, not two cards. Newsletters, promotions, and notifications never become decisions at all — they flow to a separate Cleanup surface.
 
-EmailSignal V1 does **not** use OAuth or the Gmail API. It works on top of the Gmail web DOM in a content script, so you stay in control of credentials and scope.
+EmailSignal does **not** use OAuth or the Gmail API. It reads the Gmail web DOM in a content script, so you stay in control of credentials and scope.
 
 ---
 
-## Architecture
+## How it works
+
+EmailSignal is split in two:
+
+- **The Chrome extension is a thin client.** It scans the visible Gmail DOM, renders surfaces, and executes approved DOM actions. It runs **no** intelligence and has **no** heuristic fallback.
+- **A local Node sidecar does all the intelligence.** It classifies clutter and synthesizes decisions using the OpenAI Agents SDK, streamed back over SSE.
+
+If the sidecar is unreachable or no OpenAI key is configured, the extension throws a `SidecarError` (`src/agents/llm-runner.ts`), the affected surfaces show an honest error state, and the ambient status indicator goes red. There is **no silent fallback** — the tool tells you when it can't think.
 
 ```
-                ┌───────────────┐                    ┌──────────────────────┐
-   Gmail tab    │ Content       │  ScanResult        │ Service worker       │
- (mail.google) ─┤ script        ├───────────────────►│ • Orchestrator       │
-                │ • DOM scanner │                    │ • Heuristic pass     │
-                │ • Highlighter │  Approved action   │ • LLM agents (opt.)  │
-                │ • DOM action  │◄───────────────────┤ • Policy gate        │
-                └───────────────┘                    │ • Ledger             │
-                                                     │ • Memory adapter     │
-                                                     └────────┬─────────────┘
-                                                              │
-                                                              ▼
-                                                     ┌──────────────────────┐
-                                                     │ Side panel (React)   │
-                                                     │ Daily Brief · Clutter│
-                                                     │ Actions Ledger · Chat│
-                                                     │ Settings · Cockpit   │
-                                                     └──────────────────────┘
+                 ┌────────────────────┐                       ┌─────────────────────────┐
+   Gmail tab     │ Content script     │   ScanResult (DOM)    │ Node sidecar (Hono)     │
+ (mail.google) ──┤ • DOM scanner      ├──────────────────────►│  localhost:3030         │
+                 │ • Highlighter      │                       │                         │
+                 │ • DOM action exec  │◄──── approved action ─┤ • ClutterClassifier     │
+                 └─────────┬──────────┘                       │ • DecisionSynthesizer   │
+                           │                                  │ • Redis classify cache  │
+                 ┌─────────▼──────────┐   SSE: classification │ • Vector dedup (embeds) │
+                 │ Service worker     │◄────────  + decisions ┤ • Preference reconcile  │
+                 │ • message bus      │                       │ • W&B Weave tracing     │
+                 │ • policy gate      │   SSE: chat_reply /   │ • CopilotKit runtime    │
+                 │ • action ledger    │◄──────── CopilotKit ──┤                         │
+                 └─────────┬──────────┘                       └─────────────────────────┘
+                           │
+                 ┌─────────▼──────────────────────────────┐
+                 │ Side panel (React)                      │
+                 │ Today · Cleanup · Chat · Actions · Settings
+                 └─────────────────────────────────────────┘
 ```
 
-### Agents
+### The intelligence (sidecar)
 
-V1 ships nine specialized agents, defined in [`src/agents/agent-defs.ts`](src/agents/agent-defs.ts) and wired in [`src/agents/orchestrator.ts`](src/agents/orchestrator.ts):
+All classification and synthesis lives in [`server/agents.ts`](server/agents.ts) and runs on the **OpenAI Agents SDK** (`@openai/agents`, model `gpt-4.1-mini` by default):
 
 | Agent | Job |
 |---|---|
-| **OrchestratorAgent** | Plans the turn. Routes work, enforces "no external action without explicit approval." |
-| **InboxScannerAgent** | Normalizes raw DOM data into validated `EmailCandidate`s. Never classifies. |
-| **ClutterClassifierAgent** | Categorizes batches in parallel: promotion / newsletter / marketing / cold outreach / etc. |
-| **PriorityClassifierAgent** | Identifies money, scheduling, recruiter, reply-needed, family, deadlines, travel. |
-| **MemoryAgent** | Recalls preferences. Proposes new memories as *suggestions* — never silent writes. |
-| **ActionPolicyAgent** | Validates every `ProposedAction` against the deterministic safety gate in [`policy.ts`](src/agents/policy.ts). |
-| **UnsubscribeAgent** | Executes approved unsubscribe flows only. HTTPS-only hrefs. Never submits forms. |
-| **DailyBriefAgent** | Builds the six-section daily brief. |
-| **AuditLedgerAgent** | Answers "what did you do today / show all unsubscribes / what can we undo?" |
+| **ClutterClassifierAgent** | Labels low-signal mail in parallel batches — promotion / newsletter / marketing / cold outreach / automated notification / social update / receipt. It is explicitly told **not** to classify real-person mail, and a failed deploy / security alert / payment problem is treated as *signal*, not clutter. |
+| **DecisionSynthesizerAgent** | Turns the remaining signal into a SHORT list of `Decision`s — verb-led title in the user's voice, a one-line *why*, a theme, an urgency, optional due date and action. Reasons about **time** (see below). Folds related emails together; returns an empty list ("Nothing pressing") rather than padding. |
+| **DaySummaryAgent** | Writes the one-line "here's your day" summary over the final *active* decisions — honest by construction (no decisions → no line). |
 
-The LLM-backed path uses the **OpenAI Agents SDK** (`@openai/agents`); we wire `ClutterClassifierAgent` and `PriorityClassifierAgent` as **agent-as-tool** so the orchestrator can fire both in parallel and combine results deterministically in code. With no API key configured, EmailSignal falls back to **deterministic heuristics** (`src/agents/heuristics.ts`) — the extension stays useful and private.
+Only **definite** noise (promotion/newsletter/marketing/cold-outreach/automated-notification/social-update) is removed before synthesis. Ambiguous categories (other / receipt / repeat-sender) stay in, so an over-eager clutter label can never bury a personal reply.
+
+Two cost optimizations sit around the agents:
+
+- **Exact-match classify cache (Redis).** A rescan of an unchanged inbox under unchanged preferences replays the derived result instead of re-running ~20 OpenAI calls. The cache key is namespaced by a *hashed* account address, the candidate id-set, and the user's preferences. A partially-failed run is never cached.
+- **Vector dedup of decisions.** When synthesis produces more than the short-list cap, decisions are embedded and clustered to merge duplicates deterministically (`server/embeddings.ts`, `server/dedup.ts`) — ~100× cheaper than an LLM consolidation pass, with an LLM merge only as a fallback.
+
+**Sender names are resolved server-side** (`resolveSenderName`), so no surface ever shows `noreply@…` or a raw address.
+
+### Time awareness
+
+EmailSignal reasons about *when* something matters, not just how old the email is — because **recency is not relevance**. An unpaid bill from six weeks ago is *more* urgent with age; a flight booked months ago for tomorrow is critical; but a viewing that already happened, or a resolved overspend alert, is dead.
+
+- The Gmail scanner captures each email's absolute received date (`receivedAt`, from the row's date-cell `title` attribute), and the sidecar anchors every prompt with **"TODAY IS …"** so the model resolves relative dates ("the 15th", "next Tue") against the email's own date, never its training cutoff.
+- The synthesizer tags each decision with a `windowType` — `deadline` (owed until done — escalates as it nears and when overdue), `event` (a moment that passes), or `standing` — and a `resolved` flag set only on explicit in-thread evidence (a later "paid"/"confirmed"/your own reply).
+- Ranking keeps urgency primary but reorders by the **next relevant moment**: due-soon and overdue deadlines rise; a gentle continuous recency tiebreaker separates equals (no hard age cliff).
+- Stale standing items, passed events, and resolved threads are **demoted** — never hidden — into a quiet, collapsed **"Likely past — handled?"** group, with a hedged one-liner ("from about 3 weeks ago — likely already handled"). Money, security, real future deadlines, and high/critical items are exempt from age demotion, because hiding a live item is far worse than surfacing a dead one.
+
+> The richer multi-agent registry in [`src/agents/agent-defs.ts`](src/agents/agent-defs.ts) (orchestrator, policy, unsubscribe, audit, memory, …) governs the **action** pipeline and chat. The live *classification* path is the two sidecar agents above; the older heuristic and priority/brief paths have been removed.
+
+### Surfaces (side panel)
+
+- **Today** — the ranked list of `Decision` cards. This is the product.
+- **Cleanup** — clutter grouped for safe, reversible tidying (mark-read / archive / unsubscribe), behind approvals.
+- **Chat** — a conversation about your inbox, powered by **CopilotKit** generative UI against the sidecar's `/copilotkit` runtime.
+- **Actions** — the permanent ledger of every proposed / approved / executed / blocked action.
+- **Settings** — sidecar URL (default `http://localhost:3030`), OpenAI key, dry-run, and kill switch.
 
 ### Data contracts
 
 Strict Zod schemas under [`src/schemas`](src/schemas) govern every boundary:
 
 - `EmailCandidate`, `EmailThreadSummary`, `ScanResult`
-- `ClutterFinding`, `ClutterSenderGroup`
-- `PriorityFinding`
+- `Decision` — the core synthesis unit (Today); carries temporal fields (`windowType`, `resolved`, `receivedAt`, `demoted`, `demotedReason`)
+- `ClutterFinding`, `ClutterSenderGroup` — Cleanup
 - `ProposedAction`, `ApprovalRecord`, `ExecutedAction`, `ActionLedgerEntry`
 - `UserPreference`, `MemoryRecord`, `MemorySuggestion`
-- `DailyBrief`, `DailyBriefSection`
-- `AgentTraceEvent`
+- `AccountIdentity` — the signed-in address (scraped, hashed before caching)
+- `AgentTraceEvent` — cockpit / Weave timeline
 - `ExtMessage` — the wire protocol between content / background / side panel; every inbound message is `parseExtMessage`'d before use.
+
+(`PriorityFinding` and `DailyBrief` schemas remain for compatibility but are no longer the live path.)
 
 ---
 
 ## Setup
+
+EmailSignal needs **two** things running: the sidecar and the loaded extension.
 
 ```bash
 # 1. Clone, install
 git clone … && cd email-signal
 npm install
 
-# 2. (Optional) Set local env. The extension does NOT read .env — it reads
-#    chrome.storage.local. Use the .env file for evals and the (future) Node
-#    companion server.
+# 2. Configure the sidecar
 cp .env.example .env
-$EDITOR .env
+$EDITOR .env            # set OPENAI_API_KEY (or paste the key in the extension Settings instead)
 
-# 3. Build the extension bundle
+# 3. Start the sidecar (Hono, http://localhost:3030)
+npm run server          # tsx watch; or `npm run server:once` for a one-shot run
+
+# 4. Build the extension bundle
 npm run build:all
 ```
 
@@ -85,97 +118,99 @@ npm run build:all
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** (top right).
 3. Click **Load unpacked** and select the `dist/` directory.
-4. Pin the EmailSignal icon to the toolbar.
-5. Open Gmail. Click the icon to open the side panel.
-6. In the **Settings** tab, paste your OpenAI API key. (Stored in `chrome.storage.local`, never sent anywhere except OpenAI.)
+4. Pin the EmailSignal icon, open Gmail, and click the icon to open the side panel.
+5. In **Settings**, confirm the sidecar URL (`http://localhost:3030`) and — if you didn't put it in `server/.env` — paste your **OpenAI API key**. The extension forwards the key to your local sidecar in the request body; it is never sent anywhere except OpenAI.
 
 The extension only has host permissions for `https://mail.google.com/*`. It cannot read or write any other tab.
 
-### Environment variables
+### Environment variables (sidecar)
 
-| Var | Used by | Notes |
+| Var | Default | Notes |
 |---|---|---|
-| `OPENAI_API_KEY` | evals, optional Node side panel | Extension reads its own key from chrome.storage. |
-| `WANDB_API_KEY` | Weave tracing | Optional. Without it, traces still appear in the in-extension cockpit. |
-| `WANDB_PROJECT` | Weave tracing | Defaults to `email-signal`. |
-| `REDIS_URL` | Node-side memory | Without it, memory falls back to `chrome.storage.local`. |
-| `EMAIL_SIGNAL_DRY_RUN` | Node evals | Extension dry-run toggle lives in Settings. Default ON. |
-| `EMAIL_SIGNAL_SEND_FULL_BODIES` | LLM agents | Default false → only snippets are sent. |
-| `EMAIL_SIGNAL_NOTIFY_INTERVAL_MIN` | service worker alarm | Default 30. |
+| `OPENAI_API_KEY` | — | Used by the sidecar. May instead be forwarded from the extension Settings. |
+| `EMAIL_SIGNAL_PORT` | `3030` | Sidecar listen port. |
+| `EMAIL_SIGNAL_MODEL` | `gpt-4.1-mini` | Model for both agents. |
+| `EMAIL_SIGNAL_BATCH_SIZE` | `25` | Candidates per parallel classifier call. |
+| `REDIS_URL` | — | Enables the classify cache + cross-device preferences. Falls back to a local JSON store (`.data/memory.json`). |
+| `WANDB_API_KEY` | — | Enables W&B Weave tracing. Without it, tracing is a silent pass-through. |
+| `WANDB_PROJECT` | `email-signal` | Weave project name. |
+| `EMAIL_SIGNAL_SEND_FULL_BODIES` | `false` | When false, only ~512-char snippets reach the model. |
+| `EMAIL_SIGNAL_DRY_RUN` | `true` | Extension dry-run toggle also lives in Settings. |
+| `EMAIL_SIGNAL_NOTIFY_INTERVAL_MIN` | `30` | Service-worker notification cadence; `0` disables. |
+
+### Sidecar endpoints
+
+| Route | Purpose |
+|---|---|
+| `GET /health` | Liveness + whether an OpenAI/Weave key is configured. |
+| `POST /orchestrate/classify` | SSE — emits `classification` (clutter) then `decisions`. |
+| `POST /orchestrate/chat` | SSE — emits `chat_reply`. |
+| `ALL /copilotkit` | CopilotKit runtime for the generative-UI chat. |
 
 ---
 
 ## Safety model
 
-EmailSignal V1 was written assuming the **first thing that goes wrong is the agent doing something the user didn't intend**. Specific guarantees:
+EmailSignal assumes the **first thing that goes wrong is the agent doing something the user didn't intend**. Guarantees:
 
-1. **No destructive actions, ever, in V1.** The policy gate in [`src/agents/policy.ts`](src/agents/policy.ts) hard-blocks delete / send / forward / reply action types. The hard-block precedes the LLM-advised policy agent, so a hallucinated tool name cannot route around it.
-2. **No external action without explicit user approval.** The orchestrator generates a `ProposedAction`, the policy gate vets it, and the side panel renders an `ApprovalActionCard`. Only after `panel/approve_action` arrives does the service worker tell the content script to act.
+1. **No destructive actions, ever.** The policy gate in [`src/agents/policy.ts`](src/agents/policy.ts) hard-blocks delete / send / forward / reply action types. The deterministic gate runs *after* any LLM advice, so a hallucinated tool name cannot route around it.
+2. **No external action without explicit approval.** An action is proposed, vetted by the policy gate, and rendered as an approval card. Only after the user approves does the content script act.
 3. **Dry run is ON by default.** Even after approval, no DOM clicks happen until you flip the toggle. Dry-run still records to the ledger so you can review proposals end-to-end.
-4. **Kill switch.** One click in the side panel sets `chrome.storage.local[es.killSwitch.v1]=true` and the orchestrator aborts every turn. The service-worker alarm respects it too.
-5. **HTTPS-only unsubscribes.** Clicking opens the unsubscribe href in a *new tab* (`window.open(..., 'noopener,noreferrer')`). EmailSignal never auto-submits forms on the destination page, never enters credentials or payment details.
-6. **Memory writes always require explicit approval.** Agent-proposed memory updates land in the UI as a `MemorySuggestionCard`. Only `source: 'user'` records skip the approval step.
-7. **Bounded body excerpts.** By default we send at most 512 characters of email body to the LLM. Override with `EMAIL_SIGNAL_SEND_FULL_BODIES=true`.
-8. **Permanent ledger.** Every proposed, approved, rejected, executed, and blocked action is recorded with timestamps, agent attribution, and the result. Live audit lives in the **Actions** tab.
+4. **Kill switch.** One click sets `chrome.storage.local[es.killSwitch.v1]=true` and every turn aborts.
+5. **HTTPS-only unsubscribes** in a new tab (`noopener,noreferrer`). EmailSignal never auto-submits forms, never enters credentials or payment details.
+6. **Memory writes require explicit approval.** Agent-proposed preferences surface as a suggestion card; only `source: 'user'` records skip approval.
+7. **Bounded body excerpts.** At most ~512 chars of body reach the model unless `EMAIL_SIGNAL_SEND_FULL_BODIES=true`.
+8. **Permanent ledger** of every proposed, approved, rejected, executed, and blocked action, with timestamps and agent attribution.
 
 ---
 
 ## Observability
 
-`src/weave/tracing.ts` exports `recordTrace(event)` for `session_start / turn_start / agent_start / tool_call / approval_requested / approval_granted / action_executed / action_blocked / error / turn_end`. Three sinks:
+Tracing runs **server-side** via W&B Weave. When `WANDB_API_KEY` is set, the sidecar calls `initServerWeave()` and wraps each agent run as a named Weave op (`email_signal.classify_clutter`, `email_signal.synthesize_decisions`, `email_signal.chat`, …), so inputs/outputs show up in the W&B dashboard. Without the key it is a zero-overhead pass-through.
 
-1. The in-extension **Agent activity** cockpit (always on).
-2. `chrome.storage.local[es.trace.v1]` (last 500 events, for replay).
-3. W&B Weave when `WANDB_API_KEY` is set in a Node companion process (the extension service worker can't load the full Weave SDK; see roadmap).
-
-The OpenAI Agents SDK has a `WeaveTracingProcessor`-style integration; we attach it from the Node side runner when wired.
+In the extension, `src/weave/tracing.ts` still records a local trace stream (`session_start / agent_start / agent_end / error / …`) that drives the in-panel **Agent activity** cockpit and is mirrored to the side panel over `bg/trace_event`.
 
 ---
 
-## Memory
+## Memory & preferences
 
-- **Default** (no Redis): `chrome.storage.local` via `JsonMemoryStore` (in-extension) or an in-memory map (Node tests).
-- **Redis** (`REDIS_URL` set, Node context): `RedisMemoryStore` uses hashes for preferences (`es:pref:<userId>`) and streams for memory records (`es:mem:<userId>`). An embedding column is reserved on each record for future vector-search via Redis Iris / RediSearch.
-- Both implementations share the [`MemoryStore`](src/memory/interface.ts) interface, so swapping in **Redis Iris Context Retriever** or **Redis Agent Memory** later means writing a new adapter class.
+- **Default** (no Redis): a local JSON store (`.data/memory.json` on the sidecar; `chrome.storage.local` in the extension).
+- **Redis** (`REDIS_URL` set): preferences are stored per hashed account and **reconciled server-side** with what the extension forwards, so they sync across devices.
+- Preferences (`important_sender`, `ignored_sender`, `important_topic`, `time_sensitive_category`, `liked_newsletter`) are folded directly into the synthesis prompt **and** into the classify-cache key, so changing a preference both reshapes the next result and busts the cache.
 
 ---
 
 ## Evals
 
-Fixture-backed regression tests live in [`evals/`](evals).
+Fixture-backed regression tests live in [`evals/`](evals):
 
 ```bash
-npm run evals               # run all four suites
-npm run eval:clutter        # heuristic clutter classification precision
-npm run eval:priority       # heuristic priority classification
-npm run eval:safety         # action policy gate (must block delete/send/etc)
+npm run evals               # run the full suite
+npm run eval:safety         # action policy gate must block delete/send/etc
 npm run eval:memory         # memory writes always require approval
+npm run eval:handoffs       # orchestrator handoff topology
+npm run eval:sender         # sender-name resolution / synthesis
+npm run eval:categorize     # clutter vs signal categorization
 ```
 
-Each suite is a tiny `tsx`-runnable script that loads JSON fixtures and asserts expected category/urgency/allow values. Add cases freely; the suites exit non-zero on any failure so CI can wire them in.
-
-To extend with the LLM-backed agents, write a fixture that calls `runLLMOrchestrator` from `src/agents/llm-runner.ts` with `OPENAI_API_KEY` set. Use Weave to attach the run to your project for inspection.
+Each suite is a `tsx`-runnable script that loads JSON fixtures and asserts expected values, exiting non-zero on any failure so CI can wire them in.
 
 ---
 
-## Limitations (V1)
+## Limitations
 
 - **Gmail DOM is the only provider.** Outlook lives in [`src/providers/outlook.ts`](src/providers/outlook.ts) as a stub.
-- **No Gmail API / OAuth.** That means we cannot reliably mark-as-read on emails that aren't currently visible in a row; we hide those actions behind row selectors.
-- **No semantic memory search.** `recallMemories` filters in app space. Replace with Redis Iris Context Retriever for production.
-- **Weave SDK runs only in Node.** Extension traces stream locally and to the side panel; uploading to W&B requires a Node companion (out of V1 scope).
-- **Single-user.** USER_ID is hard-coded to `local-user`. Multi-account is straightforward but unimplemented.
+- **No Gmail API / OAuth.** Actions are limited to what's reachable from a visible row selector.
+- **The sidecar is required.** No key / no sidecar → honest error state, never a degraded guess.
+- **Single account at a time**, namespaced by the scraped (hashed) signed-in address.
 
 ---
 
 ## Roadmap
 
-- **V1.1 — Companion Node service** for full Weave tracing + Redis Iris + a CLI for replays.
-- **V1.2 — Outlook DOM provider** (mirror of Gmail).
-- **V2 — Gmail / Microsoft Graph API providers** behind the same `EmailProvider` interface, gated by OAuth.
-- **V2.x — Reply drafting agent** with the same explicit-approval pattern (never autosend).
-- **V2.x — Per-action reversal** via the AuditLedgerAgent (undo archive/mark-read).
-- **CopilotKit AG-UI**: switch the chat tab to AG-UI for richer generative cards in the conversation stream.
+- **Outlook DOM provider** — mirror of the Gmail scanner behind the same interface.
+- **Gmail / Microsoft Graph API providers** behind the `EmailProvider` interface, gated by OAuth.
+- **Per-action reversal** via the ledger (undo archive / mark-read).
 
 ---
 
@@ -184,65 +219,53 @@ To extend with the LLM-backed agents, write a fixture that calls `runLLMOrchestr
 ```
 public/
   manifest.json                # Chrome MV3 manifest
-  icons/                       # drop real PNGs here
+  icons/
+
+server/                        # the Node sidecar (all intelligence)
+  index.ts                     # Hono server: /health, /orchestrate/*, /copilotkit
+  agents.ts                    # ClutterClassifier + DecisionSynthesizer (OpenAI Agents SDK)
+  cache.ts                     # Redis exact-match classify cache
+  embeddings.ts                # batched OpenAI embeddings
+  dedup.ts                     # vector clustering / decision dedup
+  memory.ts                    # server-side preference reconcile
+  trace-bridge.ts              # SSE writer + Weave emit
 
 src/
-  schemas/                     # Zod contracts (the single source of truth)
+  schemas/                     # Zod contracts (single source of truth)
   agents/
-    agent-defs.ts              # 9 agent names + instructions
-    heuristics.ts              # no-LLM fallback classifiers
-    orchestrator.ts            # service-worker entry; turns trigger -> dispatch
-    llm-runner.ts              # @openai/agents adapter (lazy-imported)
+    agent-defs.ts              # agent names + instructions (topology)
+    orchestrator.ts            # in-extension turn dispatch
+    llm-runner.ts              # SSE client to the sidecar (throws SidecarError)
+    action-factory.ts          # builds ProposedActions
     policy.ts                  # deterministic ActionPolicy gate
-    tools.ts                   # tool schemas/executors used by the agents
-    runtime.ts                 # key/dry-run/kill-switch lookups
+    tools.ts / runtime.ts / types.ts
   background/
     service-worker.ts          # MV3 background — owns the message bus
-  content/
-    index.ts                   # content-script entry
-    dom-actions.ts             # safe DOM action executor (post-approval)
-    highlighter.ts             # outline + scroll-to
-    highlight.css
+  content/                     # DOM scanner host, action executor, highlighter
   providers/
-    gmail.ts                   # DOM scanner
+    gmail.ts                   # DOM scanner (inbox + deep scroll-scan)
     outlook.ts                 # stub
     types.ts                   # EmailProvider interface
-  memory/
-    interface.ts
-    json-store.ts              # chrome.storage / in-memory fallback
-    redis-store.ts             # ioredis adapter (Node-only)
-    index.ts                   # auto-selects the right store
-  ledger/
-    local-ledger.ts            # permanent action ledger
-  weave/
-    tracing.ts                 # recordTrace + Weave init
-    bridge.ts                  # ship traces to side panel
-  mock/
-    sample-emails.ts           # deterministic fixture used by evals + Mock mode
-  common/
-    constants.ts
-    messaging.ts
-    log.ts
+  common/                      # sender resolution, constants, messaging, log
+  memory/                      # interface + json/redis stores
+  ledger/                      # permanent action ledger
+  weave/                       # local trace stream + side-panel bridge
+  mock/                        # deterministic fixtures
   sidepanel/
-    index.html
-    main.tsx
-    App.tsx
-    styles.css
-    tabs/                      # DailyBriefTab, ClutterTab, LedgerTab, ChatTab, SettingsTab
-    cards/                     # EmailPriorityCard, ClutterSenderGroupCard,
-                               # ApprovalActionCard, DailyBriefSection,
-                               # ActionLedgerTable, MemorySuggestionCard,
-                               # AgentTraceTimeline
+    App.tsx                    # Today · Cleanup · Chat · Actions · Settings
+    tabs/                      # DailyBriefTab(Today), ClutterTab(Cleanup), ChatTab, LedgerTab, SettingsTab
+    cards/                     # DecisionCard, CleanupThemeCard, ClutterSenderGroupCard,
+                               # ApprovalActionCard, BatchActionReviewPanel, MemorySuggestionCard, …
+    copilot/                   # CopilotKit provider + actions
     cockpit/AgentActivityPanel.tsx
     state/                     # zustand store + chrome-runtime bridge
 
 evals/
-  fixtures/{clutter,priority,safety,memory}.json
-  {clutter,priority,safety,memory}.eval.ts
+  fixtures/{categorization,safety,memory}.json
+  {safety,memory,handoffs,synthesis,categorization}.eval.ts
   run.ts
 
 vite.config.ts                 # CRXJS-powered MV3 build
-vite.sidepanel.config.ts       # standalone web build of the side panel (handy for dev)
-tsconfig.json
+vite.sidepanel.config.ts       # standalone web build of the side panel
 .env.example
 ```
