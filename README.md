@@ -206,6 +206,8 @@ npm run eval:categorize     # clutter vs signal categorization
 
 Each suite is a `tsx`-runnable script that loads JSON fixtures and asserts expected values, exiting non-zero on any failure so CI can wire them in.
 
+When `WANDB_API_KEY` is set, every suite also logs a **versioned W&B Weave Evaluation** (a `weave.Dataset` + scorers) via the shared helper in [`evals/weave-eval.ts`](evals/weave-eval.ts), so runs are tracked and comparable over time — editing a fixture publishes a new dataset version rather than overwriting it. Datasets: `email-theme-categorization`, `email-safety-cases`, `email-memory-recall`, `email-handoffs`. Without the key the suites run exactly as before (local pass/fail, no Weave). The `safety`/`memory`/`handoffs` suites are deterministic (no LLM); only `categorize` needs `OPENAI_API_KEY`.
+
 ---
 
 ## Limitations

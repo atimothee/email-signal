@@ -4,6 +4,7 @@ import { subscribeTrace } from '../src/weave/tracing.js';
 import { clearLedger, getLedger } from '../src/ledger/local-ledger.js';
 import { AgentTraceEvent, ApprovalRecord, ProposedAction } from '../src/schemas/index.js';
 import { AGENT_NAMES } from '../src/agents/agent-defs.js';
+import { logWeaveEvaluation } from './weave-eval.js';
 
 interface Result {
   passed: number;
@@ -13,6 +14,22 @@ interface Result {
 
 function check(failures: string[], cond: boolean, msg: string): void {
   if (!cond) failures.push(msg);
+}
+
+/** A trace-event predicate matching a specific handoff in a captured timeline. */
+function hasHandoff(
+  traces: AgentTraceEvent[],
+  toAgent: string,
+  kind: string,
+  outcome?: string
+): boolean {
+  return traces.some(
+    (t) =>
+      t.kind === 'agent_handoff' &&
+      t.data?.['toAgent'] === toAgent &&
+      t.data?.['kind'] === kind &&
+      (outcome === undefined || t.data?.['outcome'] === outcome)
+  );
 }
 
 function unsubscribeAction(overrides: Partial<ProposedAction> = {}): Omit<
@@ -52,6 +69,13 @@ export async function runHandoffsEval(): Promise<Result> {
   const failures: string[] = [];
   let passed = 0;
   const total = 6;
+
+  // Scenarios run SEQUENTIALLY and capture their real trace timelines. They share
+  // global state (the audit ledger + the process-wide trace subscription), so they
+  // can NOT run concurrently — which is also why the Weave Evaluation below replays
+  // these captured runs rather than re-executing each scenario inside a (parallel)
+  // model op. The scorers still inspect the REAL captured trace events.
+  const runs: Record<string, { traces: AgentTraceEvent[]; signals: Record<string, unknown> }> = {};
 
   // ---- Test 1: unauthorized blocked (http href on unsubscribe) ----
   await clearLedger();
@@ -104,6 +128,10 @@ export async function runHandoffsEval(): Promise<Result> {
     // 4 sub-assertions roll into one "test 1 passed" tally; count individually.
     if (blocked === null) passed++;
     if (ledger.length === 0) passed++;
+    runs['unauth'] = {
+      traces: traces1,
+      signals: { blockedIsNull: blocked === null, ledgerLen: ledger.length },
+    };
   } finally {
     unsub1();
   }
@@ -150,6 +178,10 @@ export async function runHandoffsEval(): Promise<Result> {
 
     if (entry && entry.executed) passed++;
     if (auditHandoff) passed++;
+    runs['approved'] = {
+      traces: traces2,
+      signals: { hasExecutedEntry: !!(entry && entry.executed) },
+    };
   } finally {
     unsub2();
   }
@@ -185,6 +217,10 @@ export async function runHandoffsEval(): Promise<Result> {
     );
     check(failures, !!failHandoff, 'failure: AuditLedgerAgent handoff with outcome=failed must be emitted');
     if (entry?.executed?.result?.ok === false && failHandoff) passed++;
+    runs['failed'] = {
+      traces: traces3,
+      signals: { executedOkFalse: entry?.executed?.result?.ok === false },
+    };
   } finally {
     unsub3();
   }
@@ -205,9 +241,75 @@ export async function runHandoffsEval(): Promise<Result> {
     );
     check(failures, !!memHandoff, 'memory: recall_memory handoff must be emitted');
     if (memRun.ok && memHandoff) passed++;
+    runs['memory'] = { traces: traces4, signals: { memOk: memRun.ok } };
   } finally {
     unsub4();
   }
+
+  // Mirror the contract as a versioned Weave Evaluation (no-op without
+  // WANDB_API_KEY). The model replays each scenario's captured run (see the note
+  // on sequential global state above); the scorers re-express the inline
+  // subscribeTrace assertions — "the expected handoff occurred" and "the outcome
+  // is correct" — by inspecting the REAL captured trace events per scenario.
+  interface HandoffRow extends Record<string, unknown> {
+    id: string;
+    scenario: string;
+  }
+  type RunOut = { traces: AgentTraceEvent[]; signals: Record<string, unknown> };
+  await logWeaveEvaluation<HandoffRow, RunOut>({
+    datasetId: 'email-handoffs',
+    evaluationId: 'multi-agent-handoffs',
+    modelName: 'orchestratorContract',
+    rows: [
+      { id: 'unauth', scenario: 'unauth' },
+      { id: 'approved', scenario: 'approved' },
+      { id: 'failed', scenario: 'failed' },
+      { id: 'memory', scenario: 'memory' },
+    ],
+    model: (row) => runs[row.scenario] ?? { traces: [], signals: {} },
+    scorers: {
+      // The handoff each scenario's contract requires actually occurred.
+      expected_handoff_present: (row, out) => {
+        const t = out.traces;
+        switch (row.scenario) {
+          case 'unauth':
+            return (
+              hasHandoff(t, AGENT_NAMES.policy, 'validate_action') &&
+              hasHandoff(t, AGENT_NAMES.audit, 'log_audit', 'blocked')
+            );
+          case 'approved':
+            return hasHandoff(t, AGENT_NAMES.audit, 'log_audit', 'executed');
+          case 'failed':
+            return t.some(
+              (e) =>
+                e.kind === 'agent_handoff' &&
+                e.data?.['toAgent'] === AGENT_NAMES.audit &&
+                e.data?.['outcome'] === 'failed'
+            );
+          case 'memory':
+            return hasHandoff(t, AGENT_NAMES.memory, 'recall_memory');
+          default:
+            return false;
+        }
+      },
+      // The scenario's enforced outcome matches the contract.
+      outcome_correct: (row, out) => {
+        const s = out.signals;
+        switch (row.scenario) {
+          case 'unauth':
+            return s['blockedIsNull'] === true && s['ledgerLen'] === 0;
+          case 'approved':
+            return s['hasExecutedEntry'] === true;
+          case 'failed':
+            return s['executedOkFalse'] === true;
+          case 'memory':
+            return s['memOk'] === true;
+          default:
+            return false;
+        }
+      },
+    },
+  });
 
   return { passed, total, failures };
 }

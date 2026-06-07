@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EmailCandidate, EmailCandidateSchema } from '../src/schemas/index.js';
 import { runAgentClassification } from '../server/agents.js';
+import { logWeaveEvaluation } from './weave-eval.js';
 
 /**
  * Theme-categorization eval.
@@ -131,56 +132,31 @@ async function logToWeave(
   cases: Case[],
   classifyMemo: (c: Case) => Promise<Prediction>
 ): Promise<boolean> {
-  if (!process.env['WANDB_API_KEY']) return false;
-  try {
-    const weave: any = await import('weave');
-    // Eval runs land in a SEPARATE project from prod traces by default
-    // (overridable via WANDB_PROJECT) so prod traces stay uncluttered (#47).
-    const evalProject = process.env['WANDB_PROJECT'] ?? 'email-signal-evals';
-    await weave.init(evalProject);
-
-    const dataset = new weave.Dataset({
-      id: 'email-theme-categorization',
-      rows: cases.map((c) => ({
-        id: c.name,
-        name: c.name,
-        subject: c.subject,
-        from: c.from.email,
-        expectSurfaces: c.expectSurfaces,
-        expectedTheme: c.expectedTheme ?? null,
-        forbiddenTheme: c.forbiddenTheme ?? null,
-      })),
-    });
-
-    const model = weave.op(async function themeModel(input: any) {
-      const row = input.datasetRow ?? input;
-      const c = cases.find((x) => x.name === row.name);
-      if (!c) return { surfaced: false, theme: null };
-      // Real classifier work happens here, inside the Weave op, so Weave
-      // captures latency, inputs/outputs, and nested generation spans per case.
-      return classifyMemo(c);
-    });
-
-    const lookup = (row: any): Case => cases.find((c) => c.name === row.name)!;
-    const surfacedScorer = weave.op(function surfaces({ datasetRow, modelOutput }: any) {
-      return scoreSurfaced(lookup(datasetRow), modelOutput);
-    });
-    const themeScorer = weave.op(function theme({ datasetRow, modelOutput }: any) {
-      return scoreTheme(lookup(datasetRow), modelOutput);
-    });
-
-    const evaluation = new weave.Evaluation({
-      id: 'theme-categorization',
-      dataset,
-      scorers: [surfacedScorer, themeScorer],
-    });
-    await evaluation.evaluate({ model });
-    console.log('  ↳ logged Weave evaluation to W&B project', evalProject);
-    return true;
-  } catch (err) {
-    console.warn('  ↳ weave logging skipped:', (err as Error)?.message ?? err);
-    return false;
-  }
+  const byName = new Map(cases.map((c) => [c.name, c]));
+  // Real classifier work happens inside the model op (via classifyMemo), so Weave
+  // captures latency, inputs/outputs, and nested generation spans per case.
+  return logWeaveEvaluation<Record<string, unknown>, Prediction>({
+    datasetId: 'email-theme-categorization',
+    evaluationId: 'theme-categorization',
+    modelName: 'themeModel',
+    rows: cases.map((c) => ({
+      id: c.name,
+      name: c.name,
+      subject: c.subject,
+      from: c.from.email,
+      expectSurfaces: c.expectSurfaces,
+      expectedTheme: c.expectedTheme ?? null,
+      forbiddenTheme: c.forbiddenTheme ?? null,
+    })),
+    model: (row) => {
+      const c = byName.get(row['name'] as string);
+      return c ? classifyMemo(c) : { surfaced: false, theme: null };
+    },
+    scorers: {
+      surfaces: (row, out) => scoreSurfaced(byName.get(row['name'] as string)!, out),
+      theme: (row, out) => scoreTheme(byName.get(row['name'] as string)!, out),
+    },
+  });
 }
 
 export async function runCategorizationEval(): Promise<Result & { skipped?: boolean }> {
