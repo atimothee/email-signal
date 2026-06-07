@@ -87,7 +87,7 @@ app.post('/orchestrate/classify', async (c) => {
     try {
       const result = await runAgentClassification({ turnId, candidates, writer, apiKey, account, preferences });
       await writer.send('classification', { clutter: result.clutter });
-      await writer.send('decisions', { decisions: result.decisions });
+      await writer.send('decisions', { decisions: result.decisions, summary: result.summary });
       await writer.send('done', { ok: true });
     } catch (err) {
       const message = (err as Error).message ?? 'unknown error';
