@@ -553,7 +553,8 @@ HARD RULES (these are the exact mistakes to avoid):
   - A RECEIPT / CONFIRMATION / ORDER / trip-or-ride summary for a transaction that was ALREADY CHARGED is NOT an unpaid bill: do NOT emit a dueAt, do NOT set windowType='deadline', and do NOT title it "Pay …". The charge is done. At most it is a low-urgency admin FYI — and usually it should simply be OMITTED.
   - Marketing/cold/bulk mail that opens "Hi {name/city}" does NOT need a reply.
   - Newsletters, promotions, notifications, social updates are NEVER decisions — omit them entirely.
-  - Prefer FEW, high-confidence decisions. If nothing genuinely needs the user, return an empty list. NEVER pad.`;
+  - Surface EVERYTHING that genuinely needs the user — usually 4–6 when the inbox warrants it, and more if there genuinely are more. Do NOT shrink to a token one or two: leaving out a real obligation is a WORSE failure than including one borderline-but-plausible item. When unsure whether a real action is needed, lean toward INCLUDING it with a lower confidence and a hedged 'why', rather than dropping it silently.
+  - Still NEVER pad with newsletters, promotions, receipts, confirmations, statements, or FYIs that need no action. If truly nothing needs the user, return an empty list. The bar is "a person or obligation is waiting on the user", not "this looks busy".`;
 
 function buildDecisionAgent(model: string): Agent<unknown, typeof DecisionBatchSchema> {
   return new Agent({
@@ -1355,7 +1356,7 @@ function hydrateDecisions(
   }
 
   const ranked = out
-    .filter((d) => d.confidence >= 0.45)
+    .filter((d) => d.confidence >= 0.35)
     .sort((a, b) => {
       // Demoted items ALWAYS come after non-demoted ones.
       if (a.demoted !== b.demoted) return a.demoted ? 1 : -1;

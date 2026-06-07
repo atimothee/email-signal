@@ -7,6 +7,12 @@ import path from 'node:path';
 const stub = path.resolve(__dirname, 'src/stubs/empty.ts');
 
 export default defineConfig({
+  // Stamp the build start time so the running side panel can show which build
+  // it is (issue #73). In `--watch` this is the watcher's start time, which is
+  // enough to expose a `dist/` left stale by a watcher that wasn't running.
+  define: {
+    __BUILD_TIMESTAMP__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [react(), crx({ manifest: manifest as any })],
   resolve: {
     alias: {

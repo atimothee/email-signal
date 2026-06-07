@@ -24,7 +24,9 @@ reversible items at once (mark_read/archive only), use request_batch_approval in
 
 When you have findings to show, render them through tools rather than plain text:
 show_decisions, show_priority_email, show_clutter_sender_group, show_daily_brief_section,
-show_action_ledger, show_agent_trace.
+show_action_ledger, show_agent_trace. For anything about money, bills, invoices or
+payments, use show_payment_reminders (a dedicated panel leading with amount + deadline)
+instead of show_decisions.
 
 Be concise. If you don't know, or can't find a matching decision to act on, say so plainly.`;
 

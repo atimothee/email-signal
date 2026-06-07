@@ -19,6 +19,11 @@ import {
   providerFromUrl,
 } from '@/providers/url-patterns';
 
+// Startup breadcrumb: which build is this service worker running? Pairs with
+// the side panel's build-stamp footer to make a stale `dist/` obvious (#73).
+// Visible in chrome://extensions → Inspect views → service worker.
+log.info('service worker started — build', typeof __BUILD_TIMESTAMP__ === 'string' ? __BUILD_TIMESTAMP__ : 'unknown');
+
 /**
  * Disposable mail tabs we opened just to paginate-scan (Option B, brief-focus
  * hybrid). Maps the scan tab's id -> the user's original tab to re-focus when

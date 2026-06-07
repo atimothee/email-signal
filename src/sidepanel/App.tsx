@@ -220,7 +220,30 @@ function Panel(): JSX.Element {
           </>
         )}
       </main>
+
+      <BuildStamp />
     </div>
+  );
+}
+
+/**
+ * A faint footer showing which build is actually running. The #1 failure mode
+ * (issue #73) is editing `src/` while no vite watcher is rebuilding `dist/`, so
+ * the loaded extension silently runs old code — e.g. missing the
+ * `show_payment_reminders` gen-UI tool. This turns "is this even the latest
+ * code?" from an hour of grepping `dist/assets/*.js` into a glance.
+ */
+function BuildStamp(): JSX.Element | null {
+  const iso = typeof __BUILD_TIMESTAMP__ === 'string' ? __BUILD_TIMESTAMP__ : '';
+  if (!iso) return null;
+  const d = new Date(iso);
+  const label = Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return (
+    <footer className="build-stamp" title={`Bundle built ${iso}. If this looks old after editing src/, your vite watcher isn't running — see README dev loop.`}>
+      build {label}
+    </footer>
   );
 }
 

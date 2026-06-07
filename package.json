@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --config vite.config.ts",
+    "dev:all": "concurrently -n server,extension -c cyan,green \"npm:server\" \"npm:dev\"",
     "build": "tsc --noEmit && npm run typecheck:server && vite build --config vite.config.ts",
     "build:sidepanel": "vite build --config vite.sidepanel.config.ts",
     "build:all": "npm run build && npm run build:sidepanel",
@@ -47,6 +48,7 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^10.0.3",
     "dotenv": "^16.4.5",
     "tsx": "^4.16.2",
     "typescript": "^5.5.3",
