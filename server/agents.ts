@@ -29,6 +29,7 @@ import {
   vectorIndexStatus,
   type ScoredDecision,
 } from './vector-index.js';
+import { putWorkingMemory } from './agent-memory.js';
 import {
   ClientSettings,
   resolveConfig,
@@ -680,17 +681,16 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   // Semantic KNN over the account's decision history so synthesis reasons over
   // what the user already decided about mail like this, instead of re-deriving.
   // Best-effort: [] when the vector index is disabled/unreachable — in which case
-  // the cache key below is byte-identical to the pre-Iris key. Its query embed is
-  // skipped entirely when the index is disabled, so no extra cost without Redis.
+  // the cache key below is byte-identical to the pre-Iris key, and its query embed
+  // is skipped entirely (no extra cost without Redis).
   const priorContext = await retrievePriorContext(account, candidates, cfg.openaiKey);
   const contextBlock = formatContextForSynthesis(priorContext);
 
   // ── 1) Exact-match cache ──
   // A rescan of an unchanged inbox under unchanged preferences AND unchanged
-  // retrieved context is the same (account, id-set, prefs, ctx) → replay the
-  // derived result instead of re-running ~20 OpenAI calls. The retrieved-context
-  // fingerprint is folded in (like preferences) so evolving history busts the
-  // cache. Miss/disabled → fall straight through to the live pipeline.
+  // retrieved context replays the derived result instead of re-running ~20 OpenAI
+  // calls. The retrieved-context fingerprint is folded in (like preferences) so
+  // evolving history busts the cache. Miss/disabled → fall through to the pipeline.
   const cacheKey = classifyCacheKey(
     account,
     candidates,
@@ -712,7 +712,9 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     // The cache stores only { clutter, decisions }; recompute the one-sentence
     // day summary over the cached ACTIVE (non-demoted) decisions (cheap, honest,
     // degrades to ''). Cached decisions already carry their demoted flag.
-    return { ...cached, summary: await summarizeDay(cached.decisions.filter((d) => !d.demoted), cfg.model, { sessionId, turnId }) };
+    const cachedSummary = await summarizeDay(cached.decisions.filter((d) => !d.demoted), cfg.model, { sessionId, turnId });
+    await writeWorkingMemory(account, turnId, cached.decisions, cachedSummary);
+    return { ...cached, summary: cachedSummary };
   }
 
   await emit(writer, sessionId, turnId, {
@@ -881,8 +883,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   if (!degraded) {
     await setCachedClassification(cacheKey, result);
     // ── Context Retriever write path ──
-    // Persist the FINAL decisions to the vector index so future scans can recall
-    // them. Best-effort + additive: a no-op when the index is disabled, and never
+    // Persist the FINAL decisions to the vector index so future scans recall
+    // them. Best-effort + additive: a no-op when the index is disabled and never
     // throws on the request path. Only on a clean run, mirroring the cache write —
     // indexing a partial run would pollute future retrieval with stale context.
     await indexDecisions(account, decisions, dedupVectorsByText, cfg.openaiKey, {
@@ -896,6 +898,9 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
       message: 'result not cached — a batch failed, so the run is incomplete',
     });
   }
+
+  // Working memory: record this turn's salient decisions for the next turn (#37).
+  await writeWorkingMemory(account, turnId, decisions, summary);
 
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
   return result;
@@ -1006,6 +1011,34 @@ async function indexDecisions(
     );
   } catch {
     /* best-effort index write — never breaks the request path */
+  }
+}
+
+/**
+ * Push the turn's salient context into Agent Memory working memory so the NEXT
+ * turn can pull recent session context (#37). Working memory is session-scoped
+ * and non-authoritative, so it needs no approval card. Best-effort: a no-op when
+ * AGENT_MEMORY_URL is unset; never throws on the request path. Only DERIVED text
+ * (the day summary + decision titles) is written — never raw email bodies.
+ */
+async function writeWorkingMemory(
+  account: string | undefined,
+  turnId: string,
+  decisions: Decision[],
+  summary: string
+): Promise<void> {
+  try {
+    const active = decisions.filter((d) => !d.demoted).slice(0, MAX_DECISIONS);
+    if (!summary && active.length === 0) return;
+    const lines = active.map((d) => `- ${d.title} (${d.urgency}, ${d.theme})`);
+    const content = [summary && `Day summary: ${summary}`, ...lines]
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, 2000);
+    if (!content.trim()) return;
+    await putWorkingMemory(account, turnId, [{ role: 'assistant', content }]);
+  } catch {
+    /* working memory is best-effort session context — never breaks a turn */
   }
 }
 

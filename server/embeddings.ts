@@ -16,6 +16,13 @@
 const EMBED_MODEL = process.env['EMAIL_SIGNAL_EMBED_MODEL'] ?? 'text-embedding-3-small';
 
 /**
+ * Output dimensionality of EMBED_MODEL. `text-embedding-3-small` → 1536.
+ * The vector index reads this single constant so swapping the embed model is a
+ * one-line change here (set EMAIL_SIGNAL_EMBED_DIM alongside the model).
+ */
+const EMBED_DIM = Number(process.env['EMAIL_SIGNAL_EMBED_DIM'] ?? 1536);
+
+/**
  * Optional Weave tracing. We don't import agents.ts (that would create a cycle:
  * agents → dedup → embeddings → agents), so we lazily reach for the already-
  * initialized global weave client here. `weave.op` is a no-op when Weave wasn't
@@ -74,4 +81,4 @@ export async function embedTexts(texts: string[], apiKey?: string): Promise<numb
   });
 }
 
-export const EMBED = { model: EMBED_MODEL };
+export const EMBED = { model: EMBED_MODEL, dim: EMBED_DIM };

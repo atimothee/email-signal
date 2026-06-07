@@ -7,9 +7,12 @@ import type { MemoryRecord, UserPreference } from '@schemas/index';
  *
  * Schema sketch (Redis):
  *   es:pref:<userId>              hash    { id -> JSON(UserPreference) }
- *   es:mem:<userId>               stream  XADD MemoryRecord JSON
- *   es:mem:index:<userId>:<kind>  set     memory ids
- *   es:mem:embed:<userId>         hash    { id -> base64 float32 }  (placeholder for vector search)
+ *   es:mem:<userId>               stream  XADD MemoryRecord JSON  (source of truth)
+ *   es:vec:mem:<accountHash>:<id> hash    { summary, kind, createdAt, vec }  — RediSearch
+ *                                         vector index for semantic recall (Context
+ *                                         Retriever, server/vector-index.ts). Written on
+ *                                         appendMemory + queried by recallMemories via the
+ *                                         sidecar /memory/index + /memory/recall endpoints.
  */
 export interface MemoryStore {
   listPreferences(userId: string): Promise<UserPreference[]>;
