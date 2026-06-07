@@ -6,6 +6,17 @@ EmailSignal turns a noisy inbox into a short list of **Decisions** — the few t
 
 EmailSignal does **not** use OAuth or the Gmail API. It reads the Gmail web DOM in a content script, so you stay in control of credentials and scope.
 
+## Architecture
+
+EmailSignal is a genuinely multi-agent system: an in-extension Orchestrator hands off to a Node
+sidecar running the **OpenAI Agents SDK**, with **Redis** for caching/memory, **W&B Weave** for
+tracing + evals, and **CopilotKit** for the side-panel chat. The canonical map of every agent, its
+handoffs, and where the infrastructure plugs in lives in **[docs/architecture.md](docs/architecture.md)**:
+
+[![EmailSignal agent architecture](docs/assets/architecture.png)](docs/architecture.md)
+
+<sub>Blue = active agent · dashed = registry-defined but dormant · green = UI/runtime · orange = infrastructure. Thick arrows cross the extension ↔ sidecar boundary over SSE. The source is Mermaid — see [docs/architecture.md](docs/architecture.md).</sub>
+
 ---
 
 ## How it works
