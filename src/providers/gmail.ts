@@ -22,6 +22,11 @@ const OLDER_BUTTON_SELECTOR = '[aria-label="Older"], [data-tooltip="Older"]';
 const SUBJECT_SELECTOR = '.bog, .y6 span'; // subject text in rows
 const SENDER_SELECTOR = '.yW span[email], .yW span';
 const SNIPPET_SELECTOR = '.y2';
+// Inbox row date cell. Its TITLE attribute holds a full ABSOLUTE date like
+// "Fri, Mar 3, 2026, 10:42 AM" (year + locale-formatted). The visible
+// textContent ("10:42 AM", "Mar 3", "Yesterday") is relative/ambiguous — we
+// read the title attr ONLY.
+const DATE_SELECTOR = 'td.xW span[title], .xW span[title]';
 const UNREAD_CLASS = 'zE';
 const STARRED_SELECTOR = '.T-KT.aXw';
 
@@ -45,6 +50,21 @@ function extractAddress(el: Element | null): { name?: string; email: string } {
   const emailAttr = el.getAttribute('email');
   const name = el.getAttribute('name') ?? el.textContent?.trim() ?? '';
   return { name: name || undefined, email: emailAttr ?? name };
+}
+
+/**
+ * Parse an absolute date from a span's `title` attribute (e.g.
+ * "Fri, Mar 3, 2026, 10:42 AM") into an ISO string. Returns undefined if the
+ * element/title is missing or the date is unparseable — we never guess, never
+ * fall back to the relative textContent, and never throw (bad dates must not
+ * sink a row; missing receivedAt is treated as RECENT downstream).
+ */
+function parseTitleDate(el: Element | null): string | undefined {
+  const title = el?.getAttribute('title')?.trim();
+  if (!title) return undefined;
+  const d = new Date(title);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toISOString();
 }
 
 function findUnsubscribeLinks(scope: ParentNode): string[] {
@@ -72,6 +92,7 @@ function extractRow(row: HTMLElement, idx: number, warnings: string[]): EmailCan
     const snippet = row.querySelector(SNIPPET_SELECTOR)?.textContent?.trim() ?? '';
     const isUnread = row.classList.contains(UNREAD_CLASS);
     const isStarred = !!row.querySelector(STARRED_SELECTOR);
+    const receivedAt = parseTitleDate(row.querySelector(DATE_SELECTOR));
     const idAttr =
       row.getAttribute('data-legacy-message-id') ??
       row.getAttribute('data-legacy-thread-id') ??
@@ -91,6 +112,9 @@ function extractRow(row: HTMLElement, idx: number, warnings: string[]): EmailCan
       hasUnsubscribeLink: unsubLinks.length > 0,
       unsubscribeLinkHrefs: unsubLinks,
       domAnchor: { rowSelector: buildRowSelector(row, idx) },
+      // Leave unset (not null) when unparseable so the schema's optional default
+      // applies; missing receivedAt is treated as RECENT downstream.
+      ...(receivedAt ? { receivedAt } : {}),
     });
   } catch (err) {
     warnings.push(`row ${idx}: ${(err as Error).message}`);
@@ -320,6 +344,12 @@ function readOpenThread(warnings: string[]): EmailCandidate[] {
         const bodyEl = msg.querySelector('.a3s');
         const bodyText = (bodyEl?.textContent ?? '').trim().slice(0, DEFAULTS.bodyExcerptChars);
         const unsubLinks = findUnsubscribeLinks(msg);
+        // Per-message header date span exposes a full absolute date in its
+        // title. Best-effort: any span[title] inside the message header whose
+        // title parses as a date; leave unset otherwise.
+        const receivedAt = parseTitleDate(
+          msg.querySelector(DATE_SELECTOR) ?? msg.querySelector('.g3 span[title], span.g3[title]')
+        );
         return EmailCandidateSchema.parse({
           id: hash(`${from.email}|${subject}|${idx}|${bodyText.slice(0, 64)}`),
           threadId: hash(subject),
@@ -330,6 +360,7 @@ function readOpenThread(warnings: string[]): EmailCandidate[] {
           bodyExcerpt: bodyText,
           hasUnsubscribeLink: unsubLinks.length > 0,
           unsubscribeLinkHrefs: unsubLinks,
+          ...(receivedAt ? { receivedAt } : {}),
         });
       } catch (err) {
         warnings.push(`thread msg ${idx}: ${(err as Error).message}`);
