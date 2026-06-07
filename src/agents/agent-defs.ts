@@ -82,7 +82,11 @@ ClutterCategory, confidence, a one-sentence rationale, and a suggested action
 (unsubscribe, mark_read, archive, label, open_only, ignore). Only unsubscribe is irreversible.
 CRITICAL: if an email looks like a REAL PERSON writing to a human (a personal note, a
 direct question, a reply someone is waiting on), it is NOT clutter — DO NOT include it.
-When unsure whether something is personal, leave it OUT rather than mislabeling it.
+CRITICAL: automated mail that demands the user ACT is NOT clutter either — a failed
+deployment/build/CI run that must be fixed (Vercel, Netlify, GitHub Actions, etc.), a
+security/sign-in/2FA alert, an account or payment problem. A routine "all good" or
+"report ready" notice IS clutter; a failure or security warning is signal — leave it OUT.
+When unsure whether something is personal or actionable, leave it OUT rather than mislabeling it.
 Return ONLY clutter in {findings: ClutterFinding[]}; omit everything else. You do not
 propose actions — the orchestrator routes those through UnsubscribeAgent + ActionPolicyAgent.`,
 

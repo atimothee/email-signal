@@ -145,6 +145,16 @@ A Decision is ONE thing the user must do, and may fold together MULTIPLE related
   - why: one short sentence on why it matters.
   - theme: money | reply | schedule | job | travel | admin | security | other.
   - urgency: critical | high | normal | low.
+
+THEME GUIDE (pick by what the email is ABOUT, not by a keyword it happens to contain):
+  - money: a real bill, invoice, payment, refund, or payout.
+  - reply: a person is waiting on a written response from the user.
+  - schedule: arranging a meeting/call/event or a calendar invite.
+  - job: EMPLOYMENT and the user's CAREER only — recruiters, applications, interviews, offers, HR. NOT engineering work. A CI/CD "deploy job", "build job", or "cron job" is NOT this theme.
+  - travel: flights, hotels, check-ins, itineraries.
+  - admin: operational and TECHNICAL tasks — deployment/build/CI failures (Vercel, Netlify, GitHub Actions, etc.), service/infra alerts, account and settings changes, domain/DNS, subscriptions. "Fix the deployment error" is admin.
+  - security: sign-in alerts, password resets, 2FA, suspicious-activity warnings, breach notices.
+  - other: a genuine action that fits none of the above.
   - emailIds: ids of every email folded into this decision (from the input).
   - senders: friendly sender names provided in the input — NEVER a raw address, NEVER "noreply".
   - dueAt: ISO date if a real deadline exists, else null.

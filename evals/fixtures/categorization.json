@@ -1,0 +1,76 @@
+[
+  {
+    "name": "vercel_deploy_error_is_admin_not_job",
+    "from": { "name": "Vercel", "email": "notifications@vercel.com" },
+    "subject": "Fix Deployment Error for 'shop-atlas'",
+    "snippet": "Your latest deployment of shop-atlas failed during the Build step. The build exited with code 1. Review the logs and redeploy once resolved.",
+    "expectSurfaces": true,
+    "expectedTheme": "admin",
+    "forbiddenTheme": "job",
+    "notes": "Regression: a CI/CD deployment failure was themed `job` because a deploy is a build 'job'. It is operational/technical work → admin."
+  },
+  {
+    "name": "github_actions_build_failed_is_admin_not_job",
+    "from": { "name": "GitHub", "email": "notifications@github.com" },
+    "subject": "Run failed: CI / build (push) on main",
+    "snippet": "The build job in workflow CI failed on commit a1b2c3d. 1 job failed, 0 cancelled. See the run for details.",
+    "expectSurfaces": true,
+    "expectedTheme": "admin",
+    "forbiddenTheme": "job",
+    "notes": "Same job-trap: 'build job failed' is engineering, not employment."
+  },
+  {
+    "name": "recruiter_em_role_is_job",
+    "from": { "name": "Anika at Stripe", "email": "anika@stripe.com" },
+    "subject": "Engineering Manager role at Stripe",
+    "snippet": "Hi Timothy — I came across your profile and wanted to chat about an EM opening on our payments team. Let me know if you're open to a quick call.",
+    "expectSurfaces": true,
+    "expectedTheme": "job",
+    "notes": "Positive control: a genuine recruiter email must still be themed `job`."
+  },
+  {
+    "name": "bank_bill_with_amount_and_date_is_money",
+    "from": { "name": "AT&T Billing", "email": "billing@att.com" },
+    "subject": "Your bill is due June 15",
+    "snippet": "Your statement of $84.32 is due on 2026-06-15. Pay online to avoid late fees.",
+    "expectSurfaces": true,
+    "expectedTheme": "money",
+    "notes": "A real amount due AND a pay-by date → money."
+  },
+  {
+    "name": "personal_lunch_is_reply",
+    "from": { "name": "Maya Patel", "email": "maya@designcollab.co" },
+    "subject": "Friday lunch?",
+    "snippet": "Hey! Are you free Friday for lunch near the office? Let me know.",
+    "expectSurfaces": true,
+    "expectedTheme": "reply",
+    "notes": "A person waiting on a written response → reply."
+  },
+  {
+    "name": "flight_checkin_is_travel",
+    "from": { "name": "United Airlines", "email": "reservations@united.com" },
+    "subject": "Check in for flight UA 832 (SFO -> JFK) opens in 6 hours",
+    "snippet": "Online check-in opens at 8:00 PM PT. Seat 14A is reserved.",
+    "expectSurfaces": true,
+    "expectedTheme": "travel",
+    "notes": "Flight check-in → travel."
+  },
+  {
+    "name": "password_reset_is_security",
+    "from": { "name": "Google", "email": "no-reply@accounts.google.com" },
+    "subject": "Security alert: new sign-in on Windows",
+    "snippet": "We detected a new sign-in to your Google Account on a Windows device. If this wasn't you, secure your account now.",
+    "expectSurfaces": true,
+    "expectedTheme": "security",
+    "notes": "Sign-in / suspicious-activity alert → security."
+  },
+  {
+    "name": "weekly_newsletter_is_noise",
+    "from": { "name": "Substack Reads", "email": "digest@substack.com" },
+    "subject": "Your weekly digest",
+    "snippet": "Three picks from writers you follow this week.",
+    "hasUnsubscribeLink": true,
+    "expectSurfaces": false,
+    "notes": "Newsletter is never a decision; it should be filtered as clutter and not surface."
+  }
+]

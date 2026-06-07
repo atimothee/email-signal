@@ -16,7 +16,8 @@
     "eval:safety": "tsx evals/safety.eval.ts",
     "eval:memory": "tsx evals/memory.eval.ts",
     "eval:handoffs": "tsx evals/handoffs.eval.ts",
-    "eval:sender": "tsx evals/synthesis.eval.ts"
+    "eval:sender": "tsx evals/synthesis.eval.ts",
+    "eval:categorize": "tsx evals/categorization.eval.ts"
   },
   "dependencies": {
     "@copilotkit/react-core": "^1.10.0",
