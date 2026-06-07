@@ -105,6 +105,12 @@ export function DailyBriefTab(): JSX.Element {
 
   const [batchOpen, setBatchOpen] = useState(false);
   const [undo, setUndo] = useState<{ decision: Decision; label: string } | null>(null);
+  const [demotedCollapsed, setDemotedCollapsed] = useState(true);
+
+  // Time may only ever reorder/demote, never hide: active decisions surface on
+  // top; demoted ones sink one tap away into the quiet "likely past" group.
+  const active = decisions.filter((d) => !d.demoted);
+  const demoted = decisions.filter((d) => d.demoted);
 
   // Auto-dismiss the undo snackbar after a few seconds.
   useEffect(() => {
@@ -123,6 +129,15 @@ export function DailyBriefTab(): JSX.Element {
     });
     removeDecision(decision.id);
     setUndo({ decision, label: action === 'handled' ? 'Marked handled' : 'Snoozed for a day' });
+  };
+
+  const correctDecision = (decision: Decision, text: string) => {
+    send({
+      kind: 'panel/correct_finding',
+      findingId: decision.id,
+      surface: 'priority',
+      correction: text,
+    });
   };
 
   const undoDisposition = () => {
@@ -346,10 +361,10 @@ export function DailyBriefTab(): JSX.Element {
         </>
       )}
 
-      {decisions.length > 0 && (
+      {active.length > 0 && (
         <>
-          <SectionHeading label="What needs you today" count={decisions.length} />
-          {arrange(decisions).map(({ header, decision }) => (
+          <SectionHeading label="What needs you today" count={active.length} />
+          {arrange(active).map(({ header, decision }) => (
             <React.Fragment key={decision.id}>
               {header && <div className="theme-subhead">{header}</div>}
               <DecisionCard
@@ -357,17 +372,34 @@ export function DailyBriefTab(): JSX.Element {
                 onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
                 onHandled={() => disposition(decision, 'handled')}
                 onSnooze={() => disposition(decision, 'snooze')}
-                onCorrect={(text) =>
-                  send({
-                    kind: 'panel/correct_finding',
-                    findingId: decision.id,
-                    surface: 'priority',
-                    correction: text,
-                  })
-                }
+                onCorrect={(text) => correctDecision(decision, text)}
               />
             </React.Fragment>
           ))}
+        </>
+      )}
+
+      {demoted.length > 0 && (
+        <>
+          <SectionHeading
+            label="Likely past — handled?"
+            count={demoted.length}
+            action={{
+              label: demotedCollapsed ? 'Show' : 'Hide',
+              onClick: () => setDemotedCollapsed((c) => !c),
+            }}
+          />
+          {!demotedCollapsed &&
+            demoted.map((decision) => (
+              <DecisionCard
+                key={decision.id}
+                decision={decision}
+                onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
+                onHandled={() => disposition(decision, 'handled')}
+                onSnooze={() => disposition(decision, 'snooze')}
+                onCorrect={(text) => correctDecision(decision, text)}
+              />
+            ))}
         </>
       )}
     </div>

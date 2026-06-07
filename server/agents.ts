@@ -156,6 +156,11 @@ const DecisionOutSchema = z.object({
   dueAt: z.string().nullable(),
   action: z.object({ label: z.string(), kind: DecisionActionKindEnum }).nullable(),
   confidence: z.number(),
+  // ── Temporal intelligence (model-provided) ──
+  // The action's time character so the server can rank/demote by age correctly.
+  windowType: z.enum(['deadline', 'event', 'standing', 'none']),
+  // True ONLY on explicit in-thread evidence the action is already done.
+  resolved: z.boolean(),
 });
 const DecisionBatchSchema = z.object({ decisions: z.array(DecisionOutSchema) });
 export type DecisionOut = z.infer<typeof DecisionOutSchema>;
@@ -231,6 +236,18 @@ THEME GUIDE (pick by what the email is ABOUT, not by a keyword it happens to con
   - dueAt: ISO date if a real deadline exists, else null.
   - action: { label, kind } with kind ∈ reply|pay|open|schedule|review|none, label a verb-led button — or null.
   - confidence: 0..1.
+  - windowType: deadline | event | standing | none (see TIME below).
+  - resolved: true | false (see TIME below).
+
+TIME (reason about WHEN — recency is not relevance, so classify the action's time character):
+  - windowType:
+      • 'deadline' — something is OWED or DUE BY a date and stays open until it's done. An overdue bill is MORE urgent, not less. (pay a bill, file a form, return a signed doc.)
+      • 'event' — a single moment that simply PASSES: a viewing, flight, call, meeting, RSVP-by-time. Once that moment is past, the action is DEAD.
+      • 'standing' — a real action with no date attached.
+      • 'none' — no time character / unclear.
+  - resolved: set TRUE only on EXPLICIT in-thread evidence the action is already done — a later "paid" / "confirmed" / "thanks, done", or the user's OWN sent reply in the thread. Absence of evidence is NOT resolution; default to false.
+  - dueAt: resolve relative dates ('tomorrow', 'next Tue', 'the 15th') against THAT email's receivedAt and TODAY (given in the temporal frame). Emit an ISO date, or null if there is no real deadline.
+  - HEDGE the 'why' when something LOOKS urgent but is OLD or LIKELY ALREADY PAST. Name the tension out loud, e.g. "Sender marked it urgent, but it's from March — likely already past." or "Flagged as your final notice, but the date was last week — probably handled already." Naming that tension is the whole point.
 
 HARD RULES (these are the exact mistakes to avoid):
   - A bank/account/insurance STATEMENT is NOT a payment reminder unless there is a real amount due AND an action to pay by a date. Otherwise theme=admin, low urgency — or omit it.
@@ -325,6 +342,10 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   ensureKey(input.apiKey);
   const sessionId = nanoid();
   const { turnId, candidates, writer, account } = input;
+  // Anchor "now" once for the whole scan: the model's temporal frame and all
+  // server-side recency/demotion math resolve against this single timestamp.
+  const now = new Date();
+  const frame = temporalFrame(now);
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const friendlyName = (id: string): string => {
     const c = byId.get(id);
@@ -355,8 +376,9 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     });
     await emit(writer, sessionId, turnId, { kind: 'session_end' });
     // The cache stores only { clutter, decisions }; recompute the one-sentence
-    // day summary over the cached decisions (cheap, honest, degrades to '').
-    return { ...cached, summary: await summarizeDay(cached.decisions) };
+    // day summary over the cached ACTIVE (non-demoted) decisions (cheap, honest,
+    // degrades to ''). Cached decisions already carry their demoted flag.
+    return { ...cached, summary: await summarizeDay(cached.decisions.filter((d) => !d.demoted)) };
   }
 
   await emit(writer, sessionId, turnId, {
@@ -386,7 +408,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   const clutterSettled = await Promise.allSettled(
     clutterBatches.map((batch, idx) =>
       traced('email_signal.classify_clutter', { batchIndex: idx, batchSize: batch.length },
-        () => run(clutterAgent, `Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${slimForClutter(batch)}`))
+        () => run(clutterAgent, `${frame}Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${slimForClutter(batch)}`))
         .catch((reason) => {
           void emit(writer, sessionId, turnId, { kind: 'error', agent: AGENT_NAMES.clutter, message: `clutter batch ${idx + 1}: ${formatRunError(reason)}` });
           throw reason;
@@ -436,7 +458,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     const settled = await Promise.allSettled(
       decisionBatches.map((batch, idx) =>
         traced('email_signal.synthesize_decisions', { batchIndex: idx, batchSize: batch.length },
-          () => run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`))
+          () => run(decisionAgent, `${frame}Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`))
           .catch((reason) => {
             void emit(writer, sessionId, turnId, { kind: 'error', agent: 'DecisionSynthesizerAgent', message: `synthesis batch ${idx + 1}: ${formatRunError(reason)}` });
             throw reason;
@@ -476,12 +498,14 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     }
   }
 
-  const decisions = hydrateDecisions(drafts, byId, friendlyName);
+  const decisions = hydrateDecisions(drafts, byId, friendlyName, now);
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: 'DecisionSynthesizerAgent', message: `decisions: ${decisions.length}` });
 
-  // One-sentence "here's your day" line over the FINAL decisions. Honest: '' when
-  // there are none. Never throws — a summary failure degrades to '' (see summarizeDay).
-  const summary = await summarizeDay(decisions);
+  // One-sentence "here's your day" line over the ACTIVE (non-demoted) decisions
+  // only — demoted items are "likely past — handled?", so they must not colour
+  // the day summary. Honest: '' when nothing is active. Never throws — a summary
+  // failure degrades to '' (see summarizeDay).
+  const summary = await summarizeDay(decisions.filter((d) => !d.demoted));
 
   // Persist the derived result so the next identical scan is a cache hit — but
   // ONLY when every batch succeeded. Caching a partially-failed run would replay
@@ -545,6 +569,7 @@ function slimForClutter(batch: EmailCandidate[]): string {
       from: c.from,
       subject: c.subject,
       snippet: c.snippet.slice(0, 240),
+      receivedAt: c.receivedAt ?? null,
       hasUnsubscribeLink: c.hasUnsubscribeLink,
     }))
   );
@@ -558,9 +583,29 @@ function slimForDecisions(batch: EmailCandidate[], friendlyName: (id: string) =>
       domain: domainOf(c.from.email),
       subject: c.subject.slice(0, 200),
       snippet: c.snippet.slice(0, 240),
+      receivedAt: c.receivedAt ?? null,
       hasUnsubscribeLink: c.hasUnsubscribeLink,
     }))
   );
+}
+
+/**
+ * Build the temporal frame prepended to BOTH the clutter and decision run()
+ * inputs. Anchors the model to the real "now" so every relative date in an email
+ * ('tomorrow', 'next Tue', 'the 15th') is resolved against that email's
+ * receivedAt — not against the model's training cutoff. Defensive: a bad `now`
+ * never throws.
+ */
+function temporalFrame(now: Date): string {
+  let iso = '';
+  let weekday = '';
+  try {
+    iso = now.toISOString().slice(0, 10);
+    weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+  } catch {
+    /* leave blank — frame still degrades gracefully */
+  }
+  return `TODAY IS ${iso} (${weekday}). Resolve every relative date ('tomorrow', 'next Tue', 'the 15th') against each email's receivedAt, not against your training data.\n`;
 }
 
 // ── hydration / validation (server is authoritative for display fields) ──
@@ -580,6 +625,27 @@ function hydrateClutter(f: ClutterFinding, byId: Map<string, EmailCandidate>): C
 
 const URGENCY_RANK: Record<string, number> = { critical: 3, high: 2, normal: 1, low: 0 };
 
+// ── Temporal ranking / demotion tunables ──
+/** Older than this (days), an undated standing/none item is "likely handled". */
+const STALE_AGE_DAYS = 21;
+/** A due date within this many days gets a ranking boost (and scaled by nearness). */
+const DUE_SOON_DAYS = 7;
+/** Max DEMOTED ("likely past — handled?") decisions we keep, on top of the active cap. */
+const MAX_DEMOTED = 6;
+/** Milliseconds in a day. */
+const DAY = 86400000;
+
+/**
+ * Parse an ISO string to epoch ms. Returns null on anything unparseable (NaN,
+ * empty, non-string) so callers can treat the time as UNKNOWN — never throws.
+ * DOM-scraped dates are unreliable, so an unknown date must always be safe.
+ */
+function epochMs(iso: string | null | undefined): number | null {
+  if (!iso || typeof iso !== 'string') return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
+
 /**
  * Bare category words a title must never collapse to — these are themes/synonyms,
  * not the verb-led decision titles the contract requires.
@@ -593,9 +659,19 @@ const DEGENERATE_TITLES = new Set([
 function hydrateDecisions(
   drafts: DecisionOut[],
   byId: Map<string, EmailCandidate>,
-  friendlyName: (id: string) => string
+  friendlyName: (id: string) => string,
+  now: Date
 ): Decision[] {
+  // Anchor the current time once as epoch ms. Guard against an invalid Date so a
+  // temporal computation can never throw and break the decisions flow.
+  const nowMs = (() => {
+    const t = now.getTime();
+    return Number.isNaN(t) ? Date.now() : t;
+  })();
+
   const out: Decision[] = [];
+  // Temporal ranking score per decision id, used only for the sort below.
+  const scoreById = new Map<string, number>();
   for (const d of drafts) {
     // Guard against degenerate titles. A Decision title is contracted to be
     // verb-led and in the user's voice ("Pay Absa R1,240 by Friday"); when the
@@ -609,6 +685,69 @@ function hydrateDecisions(
         ? d.senders.filter((s) => s && !s.includes('@'))
         : emailIds.map(friendlyName);
     const first = emailIds[0] ? byId.get(emailIds[0]) : undefined;
+
+    // ── Recency: the MOST RECENT received date among folded candidates ──
+    // Missing dates are treated as unknown (skipped from the max), and an item
+    // with NO known date is treated as fresh (ageDays 0) — never demoted, since
+    // DOM scraping is unreliable and hiding a live item is the worse failure.
+    let receivedMs: number | null = null;
+    for (const id of emailIds) {
+      const ms = epochMs(byId.get(id)?.receivedAt);
+      if (ms !== null && (receivedMs === null || ms > receivedMs)) receivedMs = ms;
+    }
+    const receivedAt = receivedMs !== null ? new Date(receivedMs).toISOString() : null;
+    const ageDays = receivedMs !== null ? (nowMs - receivedMs) / DAY : 0;
+
+    const dueMs = epochMs(d.dueAt);
+    const daysToDue = dueMs !== null ? (dueMs - nowMs) / DAY : null;
+
+    const windowType = d.windowType;
+    const resolved = d.resolved === true;
+    const urgency = d.urgency;
+    const theme = d.theme;
+
+    // ── Demotion (FIRST match wins) ── never DELETE, only sink one tap away ──
+    let demoted = false;
+    let demotedReason: string | null = null;
+    if (resolved) {
+      demoted = true;
+      demotedReason = 'looks already handled';
+    } else if (windowType === 'event' && daysToDue !== null && daysToDue < 0) {
+      // A moment that already passed is dead.
+      demoted = true;
+      demotedReason = `this was scheduled for ${Math.round(-daysToDue)} day(s) ago`;
+    } else if (
+      // STALE: an undated, non-time-critical standing/none item that's gone quiet.
+      // EXEMPT: money/security, any real future due date, deadlines, and
+      // critical/high urgency — those grow MORE urgent (or stay live) with age.
+      !d.dueAt &&
+      (windowType === 'standing' || windowType === 'none') &&
+      ageDays > STALE_AGE_DAYS &&
+      (urgency === 'normal' || urgency === 'low') &&
+      theme !== 'money' &&
+      theme !== 'security'
+    ) {
+      demoted = true;
+      demotedReason = `from about ${Math.round(ageDays / 7)} week(s) ago — likely already handled`;
+    }
+    // Missing receivedAt => ageDays 0 => stale branch never fires => never demoted.
+    // The future-due / deadline / urgency exemptions are expressed by the stale
+    // branch's own guards (!d.dueAt, windowType, urgency) above.
+
+    // ── Ranking score (sort DESC) — urgency stays primary; time only reorders ──
+    let score = URGENCY_RANK[urgency] ?? 0;
+    // due-soon boost: nearer deadlines rank higher, scaled 0..1.5.
+    if (daysToDue !== null && daysToDue >= 0 && daysToDue <= DUE_SOON_DAYS) {
+      score += 1.5 * (1 - daysToDue / DUE_SOON_DAYS);
+    }
+    // overdue-deadline boost: an unpaid/overdue obligation is MORE urgent.
+    if (windowType === 'deadline' && daysToDue !== null && daysToDue < 0) {
+      score += 1.0;
+    }
+    score += (d.confidence ?? 0.7) * 0.1;
+    // gentle, continuous recency tiebreaker (no cliff): older items drift down.
+    score -= ageDays / 365;
+
     const parsed = DecisionSchema.safeParse({
       id: nanoid(),
       title: d.title.slice(0, 140),
@@ -622,13 +761,33 @@ function hydrateDecisions(
       suggestedAction: d.action ?? null,
       confidence: Math.max(0, Math.min(1, d.confidence ?? 0.7)),
       rowSelector: first?.domAnchor.rowSelector ?? null,
+      windowType,
+      resolved,
+      receivedAt,
+      demoted,
+      demotedReason,
     });
-    if (parsed.success && parsed.data.title.trim()) out.push(parsed.data);
+    if (parsed.success && parsed.data.title.trim()) {
+      out.push(parsed.data);
+      scoreById.set(parsed.data.id, score);
+    }
   }
-  return out
+
+  const ranked = out
     .filter((d) => d.confidence >= 0.45)
-    .sort((a, b) => (URGENCY_RANK[b.urgency]! - URGENCY_RANK[a.urgency]!) || b.confidence - a.confidence)
-    .slice(0, MAX_DECISIONS);
+    .sort((a, b) => {
+      // Demoted items ALWAYS come after non-demoted ones.
+      if (a.demoted !== b.demoted) return a.demoted ? 1 : -1;
+      // Within each group: by temporal score DESC, then confidence as a tiebreak.
+      const sb = scoreById.get(b.id) ?? 0;
+      const sa = scoreById.get(a.id) ?? 0;
+      return sb - sa || b.confidence - a.confidence;
+    });
+
+  // Cap: up to MAX_DECISIONS ACTIVE plus up to MAX_DEMOTED demoted; active first.
+  const active = ranked.filter((d) => !d.demoted).slice(0, MAX_DECISIONS);
+  const demotedList = ranked.filter((d) => d.demoted).slice(0, MAX_DEMOTED);
+  return [...active, ...demotedList];
 }
 
 // ---- Chat ----

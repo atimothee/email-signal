@@ -55,8 +55,12 @@ export function DecisionCard({
     window.setTimeout(cb, 280);
   };
 
+  const overdue = isOverdue(decision.dueAt);
+
   return (
-    <article className={`card decision t-${decision.theme} ${leaving ? 'leaving' : ''}`}>
+    <article
+      className={`card decision t-${decision.theme} ${decision.demoted ? 'demoted' : ''} ${leaving ? 'leaving' : ''}`}
+    >
       <div className="decision-head">
         <span className="theme-chip">{THEME_LABEL[decision.theme]}</span>
         {decision.urgency !== 'normal' && decision.urgency !== 'low' && (
@@ -64,16 +68,27 @@ export function DecisionCard({
             {URGENCY_LABEL[decision.urgency]}
           </span>
         )}
-        {decision.dueAt && <span className="pill due">due {formatDue(decision.dueAt)}</span>}
+        {decision.dueAt &&
+          (overdue ? (
+            <span className="pill due overdue">overdue · {formatDue(decision.dueAt)}</span>
+          ) : (
+            <span className="pill due">due {formatDue(decision.dueAt)}</span>
+          ))}
       </div>
 
       <h3 className="decision-title">{decision.title}</h3>
       <p className="decision-why">{decision.why}</p>
+      {decision.demoted && decision.demotedReason && (
+        <p className="demoted-reason">{decision.demotedReason}</p>
+      )}
 
       <div className="decision-foot">
         <span className="decision-senders" title={decision.senders.join(', ')}>
           {sendersLabel(decision)}
         </span>
+        {!decision.demoted && decision.receivedAt && (
+          <span className="decision-age">{formatRelativeAge(decision.receivedAt)}</span>
+        )}
       </div>
 
       <div className="actions">
@@ -112,4 +127,40 @@ function formatDue(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** True when dueAt parses to a time strictly before now. Unparseable -> false. */
+function isOverdue(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getTime() < Date.now();
+}
+
+/**
+ * Quiet, human relative age of an email: "Just now", "5m", "3h",
+ * "2 days ago", "3 weeks ago", "4 months ago". Recency is a faint cue, never a
+ * relevance signal — this is display only. Unparseable -> empty string.
+ */
+export function formatRelativeAge(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const diffMs = Date.now() - d.getTime();
+  if (diffMs < 0) return 'Just now';
+
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks} ${weeks === 1 ? 'week' : 'weeks'} ago`;
+
+  const months = Math.floor(days / 30);
+  return `${months} ${months === 1 ? 'month' : 'months'} ago`;
 }
