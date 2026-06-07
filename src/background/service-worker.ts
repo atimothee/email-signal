@@ -239,6 +239,26 @@ onMessage(async (msg, sender) => {
         }
         return;
       }
+      case 'panel/open_thread': {
+        // Jump to a decision's email: focus the Gmail tab and ask its content
+        // script to navigate to the thread (pagination-proof locator) or, failing
+        // that, highlight the row. If no Gmail tab is open we simply no-op here;
+        // the panel shows its own "Open Gmail to jump here" toast.
+        const tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
+        const target = tabs[0];
+        if (target?.id) {
+          await chrome.tabs.update(target.id, { active: true });
+          if (target.windowId !== undefined) {
+            await chrome.windows.update(target.windowId, { focused: true });
+          }
+          await sendToTab(target.id, {
+            kind: 'bg/open_thread',
+            locator: msg.locator ?? null,
+            fallbackSelector: msg.fallbackSelector ?? null,
+          });
+        }
+        return;
+      }
       case 'panel/request_brief': {
         await runOrchestratorTurn({ trigger: 'brief' });
         return;

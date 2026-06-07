@@ -77,6 +77,18 @@ export function useGenerativeUiBindings(): void {
             <DecisionCard
               key={d.id}
               decision={d}
+              onPrimary={(decision) => {
+                // Same open-link-else-thread behavior as the Today tab (#31).
+                if (decision.actionUrl) {
+                  window.open(decision.actionUrl, '_blank', 'noopener,noreferrer');
+                } else if (decision.threadLocator || decision.rowSelector) {
+                  send({
+                    kind: 'panel/open_thread',
+                    locator: decision.threadLocator ?? null,
+                    fallbackSelector: decision.rowSelector ?? null,
+                  });
+                }
+              }}
               onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
               // Wire the same dispositions the Today tab uses so Snooze /
               // Mark handled / "Not for me" actually do something in chat too

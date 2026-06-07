@@ -65,6 +65,27 @@ chrome.runtime.onMessage.addListener((raw) => {
           setTimeout(() => removeHighlight(msg.selector), 8000);
           break;
         }
+        case 'bg/open_thread': {
+          // Navigate Gmail to the thread via its hash locator (survives
+          // pagination); then briefly highlight the row if we have a selector.
+          // The hash locator is the reliable path; the selector is best-effort.
+          if (msg.locator && msg.locator.startsWith('#')) {
+            if (location.hash === msg.locator) {
+              // Already there — nudge Gmail to re-render via a no-op hash bounce.
+              location.hash = '#all';
+            }
+            location.hash = msg.locator;
+          }
+          if (msg.fallbackSelector) {
+            const sel = msg.fallbackSelector;
+            // Let any hash navigation settle before trying to highlight the row.
+            setTimeout(() => {
+              applyHighlight(sel);
+              setTimeout(() => removeHighlight(sel), 8000);
+            }, msg.locator ? 600 : 0);
+          }
+          break;
+        }
         case 'bg/execute_dom_action': {
           const res = await executeProposedAction(msg.action);
           await sendToBackground({

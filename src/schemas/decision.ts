@@ -61,6 +61,18 @@ export const DecisionSchema = z.object({
   confidence: z.number().min(0).max(1).default(0.7),
   /** DOM selector for "Show in Gmail" on the first email, when known. */
   rowSelector: z.string().nullable().optional(),
+  /**
+   * Best actionable link from the underlying email (payment/receipt/CTA). The
+   * primary button opens this in a new tab when present. Server-copied from the
+   * first folded candidate. Null for most decisions.
+   */
+  actionUrl: z.string().nullable().optional(),
+  /**
+   * Pagination-proof Gmail thread locator (e.g. "#all/<threadId>"). When there's
+   * no actionUrl, the primary button opens the thread via this instead of the
+   * fragile rowSelector highlight. Server-copied from the first candidate.
+   */
+  threadLocator: z.string().nullable().optional(),
 
   // ── Temporal intelligence ──────────────────────────────────────────────
   // The action's time character, so recency can be reasoned about correctly:

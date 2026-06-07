@@ -105,7 +105,15 @@ export function DailyBriefTab(): JSX.Element {
 
   const [batchOpen, setBatchOpen] = useState(false);
   const [undo, setUndo] = useState<{ decision: Decision; label: string } | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [demotedCollapsed, setDemotedCollapsed] = useState(true);
+
+  // Brief, non-blocking toast (e.g. "Open Gmail to jump here") — auto-dismisses.
+  useEffect(() => {
+    if (!note) return;
+    const t = window.setTimeout(() => setNote(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [note]);
 
   // Time may only ever reorder/demote, never hide: active decisions surface on
   // top; demoted ones sink one tap away into the quiet "likely past" group.
@@ -129,6 +137,28 @@ export function DailyBriefTab(): JSX.Element {
     });
     removeDecision(decision.id);
     setUndo({ decision, label: action === 'handled' ? 'Marked handled' : 'Snoozed for a day' });
+  };
+
+  // Primary action: open the best actionable link, else the Gmail thread (which
+  // survives pagination), else the legacy row highlight — never a silent no-op.
+  const openPrimary = (decision: Decision) => {
+    if (decision.actionUrl) {
+      window.open(decision.actionUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (decision.threadLocator || decision.rowSelector) {
+      if (!account) {
+        setNote('Open Gmail to jump to this email.');
+        return;
+      }
+      send({
+        kind: 'panel/open_thread',
+        locator: decision.threadLocator ?? null,
+        fallbackSelector: decision.rowSelector ?? null,
+      });
+      return;
+    }
+    setNote('No link captured for this one — open Gmail to find it.');
   };
 
   const correctDecision = (decision: Decision, text: string) => {
@@ -369,6 +399,7 @@ export function DailyBriefTab(): JSX.Element {
               {header && <div className="theme-subhead">{header}</div>}
               <DecisionCard
                 decision={decision}
+                onPrimary={openPrimary}
                 onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
                 onHandled={() => disposition(decision, 'handled')}
                 onSnooze={() => disposition(decision, 'snooze')}
@@ -394,6 +425,7 @@ export function DailyBriefTab(): JSX.Element {
               <DecisionCard
                 key={decision.id}
                 decision={decision}
+                onPrimary={openPrimary}
                 onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
                 onHandled={() => disposition(decision, 'handled')}
                 onSnooze={() => disposition(decision, 'snooze')}
@@ -401,6 +433,11 @@ export function DailyBriefTab(): JSX.Element {
               />
             ))}
         </>
+      )}
+      {note && (
+        <div className="undo-bar" role="status">
+          <span>{note}</span>
+        </div>
       )}
     </div>
   );

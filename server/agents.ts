@@ -821,6 +821,8 @@ function hydrateDecisions(
       suggestedAction: d.action ?? null,
       confidence: Math.max(0, Math.min(1, d.confidence ?? 0.7)),
       rowSelector: first?.domAnchor.rowSelector ?? null,
+      actionUrl: first?.actionUrl ?? null,
+      threadLocator: first?.threadLocator ?? null,
       windowType,
       resolved,
       receivedAt,

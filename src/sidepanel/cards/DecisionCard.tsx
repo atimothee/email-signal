@@ -4,7 +4,13 @@ import { CorrectThis, OverflowMenu } from './primitives';
 
 interface Props {
   decision: Decision;
-  /** Highlight the underlying email(s) in the Gmail tab. */
+  /**
+   * Do the primary action: open the best actionable link, else the Gmail thread,
+   * else highlight the row — with visible fallback. When provided, this replaces
+   * the legacy onHighlight-only behavior.
+   */
+  onPrimary?: (decision: Decision) => void;
+  /** Legacy: highlight the underlying email(s) in the Gmail tab (fallback). */
   onHighlight?: (selector: string) => void;
   /** Mark this decision dealt with — it leaves Today and won't resurface. */
   onHandled?: () => void;
@@ -39,13 +45,21 @@ const URGENCY_LABEL: Record<DecisionUrgency, string> = {
  */
 export function DecisionCard({
   decision,
+  onPrimary,
   onHighlight,
   onHandled,
   onSnooze,
   onCorrect,
 }: Props): JSX.Element {
   const actionLabel = decision.suggestedAction?.label ?? 'Open in Gmail';
-  const canOpen = !!decision.rowSelector && !!onHighlight;
+  // Actionable if we can open a link, the thread, or (legacy) highlight a row.
+  const canAct = onPrimary
+    ? !!(decision.actionUrl || decision.threadLocator || decision.rowSelector)
+    : !!decision.rowSelector && !!onHighlight;
+  const runPrimary = () => {
+    if (onPrimary) return onPrimary(decision);
+    if (decision.rowSelector) onHighlight?.(decision.rowSelector);
+  };
   const [leaving, setLeaving] = useState(false);
 
   // Tactile slide-out before the decision is removed (matches ApprovalActionCard).
@@ -94,9 +108,15 @@ export function DecisionCard({
       <div className="actions">
         <button
           className="primary"
-          onClick={() => decision.rowSelector && onHighlight?.(decision.rowSelector)}
-          disabled={!canOpen}
-          title={canOpen ? 'Jump to this in Gmail' : undefined}
+          onClick={runPrimary}
+          disabled={!canAct}
+          title={
+            canAct
+              ? decision.actionUrl
+                ? 'Open the link from this email'
+                : 'Jump to this email in Gmail'
+              : undefined
+          }
         >
           {actionLabel}
         </button>
