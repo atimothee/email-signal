@@ -7,10 +7,18 @@ import {
   ClutterFinding,
   Decision,
   DecisionSchema,
+  UserPreference,
 } from '../src/schemas/index.js';
 import { AGENT_NAMES, INSTRUCTIONS } from '../src/agents/agent-defs.js';
 import { resolveSenderName, domainOf } from '../src/common/sender.js';
 import { emit, SseWriter } from './trace-bridge.js';
+import {
+  classifyCacheKey,
+  getCachedClassification,
+  setCachedClassification,
+} from './cache.js';
+import { reconcilePreferences } from './memory.js';
+import { dedupDecisions } from './dedup.js';
 
 const MODEL = process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini';
 
@@ -106,7 +114,7 @@ const DecisionOutSchema = z.object({
   confidence: z.number(),
 });
 const DecisionBatchSchema = z.object({ decisions: z.array(DecisionOutSchema) });
-type DecisionOut = z.infer<typeof DecisionOutSchema>;
+export type DecisionOut = z.infer<typeof DecisionOutSchema>;
 
 interface ClassifyInput {
   turnId: string;
@@ -114,6 +122,19 @@ interface ClassifyInput {
   writer: SseWriter;
   /** Key forwarded from the extension Settings; overrides server env if set. */
   apiKey?: string;
+  /**
+   * Signed-in mail account (scraped from the Gmail DOM, no OAuth). Used only to
+   * namespace the classify cache so two accounts on one Redis never mix. Hashed
+   * before it touches Redis — never stored in the clear.
+   */
+  account?: string;
+  /**
+   * User preferences recalled client-side (chrome.storage). Merged with the
+   * account's Redis-stored preferences and fed into synthesis so the user's
+   * standing instructions ("ignore this sender", "this topic matters") shape the
+   * decisions. Also folded into the cache key so a preference change busts it.
+   */
+  preferences?: UserPreference[];
 }
 
 export interface ClassifyOutput {
@@ -190,12 +211,38 @@ function buildDecisionAgent(): Agent<unknown, typeof DecisionBatchSchema> {
 export async function runAgentClassification(input: ClassifyInput): Promise<ClassifyOutput> {
   ensureKey(input.apiKey);
   const sessionId = nanoid();
-  const { turnId, candidates, writer } = input;
+  const { turnId, candidates, writer, account } = input;
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const friendlyName = (id: string): string => {
     const c = byId.get(id);
     return c ? resolveSenderName(c.from, domainOf(c.from.email)) : 'Unknown sender';
   };
+
+  // ── 0) Agent Memory: recall + merge the user's preferences ──
+  // The client forwards what it has (chrome.storage); we union that with the
+  // account's Redis-stored preferences (cross-device) and mirror new ones back.
+  // The merged set both feeds synthesis and fingerprints the cache key.
+  const preferences = await reconcilePreferences(account, input.preferences ?? []);
+
+  // ── 1) Exact-match cache ──
+  // A rescan of an unchanged inbox under unchanged preferences is the same
+  // (account, id-set, prefs) → replay the derived result instead of re-running
+  // ~20 OpenAI calls. Miss/disabled → fall straight through to the live pipeline.
+  const cacheKey = classifyCacheKey(account, candidates, preferences);
+  const cached = await getCachedClassification(cacheKey);
+  if (cached) {
+    await emit(writer, sessionId, turnId, {
+      kind: 'session_start',
+      message: `Reusing cached analysis of ${candidates.length} emails`,
+    });
+    await emit(writer, sessionId, turnId, {
+      kind: 'agent_end',
+      agent: AGENT_NAMES.orchestrator,
+      message: `cache hit — ${cached.decisions.length} decision(s), ${cached.clutter.length} clutter (no LLM calls)`,
+    });
+    await emit(writer, sessionId, turnId, { kind: 'session_end' });
+    return cached;
+  }
 
   await emit(writer, sessionId, turnId, {
     kind: 'session_start',
@@ -231,6 +278,10 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     )
   );
 
+  // If any batch rejected, the assembled result is incomplete — we must NOT
+  // persist it (a transient failure would otherwise be cached for the full TTL).
+  let degraded = clutterSettled.some((r) => r.status === 'rejected');
+
   const clutter: ClutterFinding[] = [];
   for (const r of clutterSettled) {
     if (r.status !== 'fulfilled') continue;
@@ -253,6 +304,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   const noiseIds = new Set(clutter.filter((f) => NOISE_CATEGORIES.has(f.category)).map((f) => f.emailId));
   const signal = candidates.filter((c) => !noiseIds.has(c.id));
 
+  const prefsBlock = formatPreferencesForSynthesis(preferences);
+
   let drafts: DecisionOut[] = [];
   if (signal.length > 0) {
     const decisionBatches = chunk(signal, BATCH_SIZE);
@@ -266,35 +319,98 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     }
     const settled = await Promise.allSettled(
       decisionBatches.map((batch, idx) =>
-        run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.\n${slimForDecisions(batch, friendlyName)}`)
+        run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`)
           .catch((reason) => {
             void emit(writer, sessionId, turnId, { kind: 'error', agent: 'DecisionSynthesizerAgent', message: `synthesis batch ${idx + 1}: ${formatRunError(reason)}` });
             throw reason;
           })
       )
     );
+    if (settled.some((r) => r.status === 'rejected')) degraded = true;
     for (const r of settled) {
       if (r.status === 'fulfilled') {
         drafts.push(...((r.value.finalOutput as { decisions?: DecisionOut[] } | undefined)?.decisions ?? []));
       }
     }
 
-    // Cross-batch consolidation when we have more than a short list.
+    // Cross-batch consolidation when we have more than a short list. Prefer
+    // vector dedup (embed + cluster + deterministic merge) — ~100× cheaper than
+    // a consolidation LLM call and reproducible. Fall back to the LLM merge only
+    // when embeddings are unavailable.
     if (drafts.length > MAX_DECISIONS) {
-      const cons = await runSafe(() =>
-        run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`)
-      );
-      if (cons.status === 'fulfilled') {
-        const merged = (cons.value.finalOutput as { decisions?: DecisionOut[] } | undefined)?.decisions;
-        if (merged && merged.length) drafts = merged;
+      const deduped = await dedupDecisions(drafts, input.apiKey);
+      if (deduped.clustered && deduped.merged.length) {
+        await emit(writer, sessionId, turnId, {
+          kind: 'agent_end',
+          agent: 'DecisionSynthesizerAgent',
+          message: `vector dedup: ${drafts.length} drafts → ${deduped.merged.length} (no LLM)`,
+        });
+        drafts = deduped.merged;
+      } else {
+        const cons = await runSafe(() =>
+          run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`)
+        );
+        if (cons.status === 'fulfilled') {
+          const merged = (cons.value.finalOutput as { decisions?: DecisionOut[] } | undefined)?.decisions;
+          if (merged && merged.length) drafts = merged;
+        }
       }
     }
   }
 
   const decisions = hydrateDecisions(drafts, byId, friendlyName);
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: 'DecisionSynthesizerAgent', message: `decisions: ${decisions.length}` });
+
+  // Persist the derived result so the next identical scan is a cache hit — but
+  // ONLY when every batch succeeded. Caching a partially-failed run would replay
+  // an under-classified inbox for the whole TTL.
+  const result: ClassifyOutput = { clutter, decisions };
+  if (!degraded) {
+    await setCachedClassification(cacheKey, result);
+  } else {
+    await emit(writer, sessionId, turnId, {
+      kind: 'agent_end',
+      agent: AGENT_NAMES.orchestrator,
+      message: 'result not cached — a batch failed, so the run is incomplete',
+    });
+  }
+
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
-  return { clutter, decisions };
+  return result;
+}
+
+// ── preferences → synthesis directive ──
+
+/**
+ * Turn the user's standing preferences into a compact instruction block the
+ * synthesizer must honour. Returns '' when there are none, so the prompt is
+ * unchanged for users who've set nothing.
+ */
+function formatPreferencesForSynthesis(prefs: UserPreference[]): string {
+  if (!prefs.length) return '';
+  const byKind = (kind: UserPreference['kind']): string[] =>
+    prefs.filter((p) => p.kind === kind).map((p) => String(p.value)).filter(Boolean);
+
+  const lines: string[] = [];
+  const important = byKind('important_sender');
+  const ignored = byKind('ignored_sender');
+  const liked = byKind('liked_newsletter');
+  const topics = byKind('important_topic');
+  const timeSensitive = byKind('time_sensitive_category');
+
+  if (important.length)
+    lines.push(`- ALWAYS surface mail from these senders/domains and rank it higher: ${important.join(', ')}.`);
+  if (ignored.length)
+    lines.push(`- NEVER surface mail from these senders/domains — do not create a decision for them: ${ignored.join(', ')}.`);
+  if (topics.length)
+    lines.push(`- The user cares about these topics; weight related mail up: ${topics.join(', ')}.`);
+  if (timeSensitive.length)
+    lines.push(`- Treat these categories as time-sensitive (raise urgency): ${timeSensitive.join(', ')}.`);
+  if (liked.length)
+    lines.push(`- The user values these newsletters; you MAY surface them only if genuinely actionable: ${liked.join(', ')}.`);
+
+  if (!lines.length) return '';
+  return `\n\nUSER PREFERENCES (these are standing instructions — honour them strictly):\n${lines.join('\n')}`;
 }
 
 // ── payload builders ──
