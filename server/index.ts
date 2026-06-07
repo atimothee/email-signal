@@ -6,11 +6,14 @@ import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
+import OpenAI from 'openai';
 import {
   CopilotRuntime,
   OpenAIAdapter,
   copilotRuntimeNodeHttpEndpoint,
 } from '@copilotkit/runtime';
+import type { ClientSettings } from './config.js';
+import { resolveConfig } from './config.js';
 import {
   ClutterFindingSchema,
   DecisionSchema,
@@ -47,15 +50,46 @@ app.get('/health', (c) =>
     hasWeaveKey: !!process.env['WANDB_API_KEY'],
     weaveProject: process.env['WANDB_PROJECT'] ?? null,
     weaveDashboardUrl: weaveDashboardUrl(),
+    // Effective default chat model from env (Settings overrides per-request).
+    model: resolveConfig().model,
     cache: cacheStatus(),
   })
 );
 
+/**
+ * Overridable config forwarded from the extension Settings. Every field is
+ * optional; the server resolves each via resolveConfig (Settings → env →
+ * default), so an empty object reproduces today's env-only behavior exactly.
+ */
+const SettingsSchema = z.object({
+  apiKey: z.string().optional(),
+  model: z.string().optional(),
+  wandbApiKey: z.string().optional(),
+  wandbProject: z.string().optional(),
+});
+
+/**
+ * Build the effective ClientSettings from a request: prefer the new `settings`
+ * object, but fold in a legacy top-level `apiKey` when `settings.apiKey` is
+ * absent so older extension builds keep working.
+ */
+function effectiveSettings(
+  settings: ClientSettings | undefined,
+  topLevelApiKey: string | undefined
+): ClientSettings {
+  const merged: ClientSettings = { ...(settings ?? {}) };
+  if (!merged.apiKey?.trim() && topLevelApiKey?.trim()) merged.apiKey = topLevelApiKey;
+  return merged;
+}
+
 const ClassifyBody = z.object({
   turnId: z.string().optional(),
   candidates: z.array(EmailCandidateSchema).min(1).max(1000),
-  /** OpenAI key forwarded from the extension Settings; used here, never sent on. */
+  /** OpenAI key forwarded from the extension Settings; used here, never sent on.
+   *  Legacy top-level field — superseded by `settings.apiKey`, kept for compat. */
   apiKey: z.string().optional(),
+  /** Settings-first config (OpenAI key, model, Weave key/project). */
+  settings: SettingsSchema.optional(),
   /** Signed-in mail address; namespaces the classify cache (hashed before use). */
   account: z.string().optional(),
   /** Standing user preferences recalled client-side; merged into synthesis. */
@@ -76,7 +110,8 @@ app.post('/orchestrate/classify', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
   }
-  const { turnId = nanoid(), candidates, apiKey, account, preferences } = parsed.data;
+  const { turnId = nanoid(), candidates, apiKey, settings, account, preferences } = parsed.data;
+  const effective = effectiveSettings(settings, apiKey);
 
   return streamSSE(c, async (stream) => {
     const writer: SseWriter = {
@@ -85,7 +120,7 @@ app.post('/orchestrate/classify', async (c) => {
       },
     };
     try {
-      const result = await runAgentClassification({ turnId, candidates, writer, apiKey, account, preferences });
+      const result = await runAgentClassification({ turnId, candidates, writer, settings: effective, account, preferences });
       await writer.send('classification', { clutter: result.clutter });
       await writer.send('decisions', { decisions: result.decisions, summary: result.summary });
       await writer.send('done', { ok: true });
@@ -100,7 +135,10 @@ app.post('/orchestrate/classify', async (c) => {
 const ChatBody = z.object({
   turnId: z.string().optional(),
   message: z.string().min(1).max(8000),
+  /** Legacy top-level field — superseded by `settings.apiKey`, kept for compat. */
   apiKey: z.string().optional(),
+  /** Settings-first config (OpenAI key, model, Weave key/project). */
+  settings: SettingsSchema.optional(),
   /** Optional recent inbox context the client gives the server. */
   context: z
     .object({
@@ -122,7 +160,8 @@ app.post('/orchestrate/chat', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
   }
-  const { turnId = nanoid(), message, context, apiKey } = parsed.data;
+  const { turnId = nanoid(), message, context, apiKey, settings } = parsed.data;
+  const effective = effectiveSettings(settings, apiKey);
   return streamSSE(c, async (stream) => {
     const writer: SseWriter = {
       send: async (event, data) => {
@@ -130,7 +169,7 @@ app.post('/orchestrate/chat', async (c) => {
       },
     };
     try {
-      const text = await runAgentChat({ turnId, message, context, writer, apiKey });
+      const text = await runAgentChat({ turnId, message, context, writer, settings: effective });
       await writer.send('chat_reply', { text });
       await writer.send('done', { ok: true });
     } catch (err) {
@@ -146,28 +185,45 @@ app.post('/orchestrate/chat', async (c) => {
 // (cards). Approval/dry-run/kill-switch still apply because every card action
 // dispatches `panel/approve_action` etc. through the extension service worker
 // → orchestrator → policy gate.
-// Handler is built lazily on first request so a missing OPENAI_API_KEY at boot
-// doesn't crash the server.
+// The env-based handler is built lazily on first request so a missing
+// OPENAI_API_KEY at boot doesn't crash the server. When the extension forwards a
+// key/model via headers (Settings-first), we build a per-request handler instead
+// so the user's own key/model drive CopilotKit chat.
 let copilotHandler:
   | ReturnType<typeof copilotRuntimeNodeHttpEndpoint>
   | null = null;
-function getCopilotHandler() {
+function getEnvCopilotHandler() {
   if (copilotHandler) return copilotHandler;
   copilotHandler = copilotRuntimeNodeHttpEndpoint({
     endpoint: '/copilotkit',
     runtime: new CopilotRuntime(),
-    serviceAdapter: new OpenAIAdapter({
-      model: process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini',
-    }),
+    serviceAdapter: new OpenAIAdapter({ model: resolveConfig().model }),
   });
   return copilotHandler;
 }
 
+function buildCopilotHandler(apiKey: string, model: string) {
+  // Per-request handler with the forwarded key/model. The installed OpenAIAdapter
+  // accepts a custom `openai` client, so we pass the user's key cleanly here.
+  return copilotRuntimeNodeHttpEndpoint({
+    endpoint: '/copilotkit',
+    runtime: new CopilotRuntime(),
+    serviceAdapter: new OpenAIAdapter({ model, openai: new OpenAI({ apiKey }) }),
+  });
+}
+
 app.all('/copilotkit', async (c) => {
-  if (!process.env['OPENAI_API_KEY']) {
+  // Settings-first: honor a forwarded key/model (from the CopilotKit client
+  // headers). Fall back to the env-based lazy handler when no key header is sent.
+  const headerKey = c.req.header('x-openai-key')?.trim();
+  const headerModel = c.req.header('x-model')?.trim();
+  if (!headerKey && !process.env['OPENAI_API_KEY']) {
     return c.json({ error: 'OPENAI_API_KEY not set on server' }, 500);
   }
-  const res = await getCopilotHandler()(c.req.raw);
+  const handler = headerKey
+    ? buildCopilotHandler(headerKey, headerModel || resolveConfig().model)
+    : getEnvCopilotHandler();
+  const res = await handler(c.req.raw);
   return res as Response;
 });
 

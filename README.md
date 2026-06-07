@@ -74,7 +74,7 @@ EmailSignal reasons about *when* something matters, not just how old the email i
 - **Cleanup** — clutter grouped for safe, reversible tidying (mark-read / archive / unsubscribe), behind approvals.
 - **Chat** — a conversation about your inbox, powered by **CopilotKit** generative UI against the sidecar's `/copilotkit` runtime.
 - **Actions** — the permanent ledger of every proposed / approved / executed / blocked action.
-- **Settings** — sidecar URL (default `http://localhost:3030`), OpenAI key, dry-run, and kill switch.
+- **Settings** — sidecar URL (default `http://localhost:3030`), OpenAI key, chat model, W&B Weave key/project, dry-run, and kill switch. The key/model/Weave fields are **Settings-first**: a non-empty value is forwarded to your sidecar and takes precedence over `server/.env`; leave a field blank to fall back to the env value.
 
 ### Data contracts
 
@@ -125,15 +125,17 @@ The extension only has host permissions for `https://mail.google.com/*`. It cann
 
 ### Environment variables (sidecar)
 
+`OPENAI_API_KEY`, `EMAIL_SIGNAL_MODEL`, `WANDB_API_KEY`, and `WANDB_PROJECT` can also be set in the extension **Settings**, which take precedence; the `.env` values below are the fallback used when the matching Settings field is blank. Resolution is uniform: extension setting (if non-empty) → `process.env` → built-in default. (Changing the Weave project takes effect after a server restart — the first key/project to initialize wins.)
+
 | Var | Default | Notes |
 |---|---|---|
-| `OPENAI_API_KEY` | — | Used by the sidecar. May instead be forwarded from the extension Settings. |
+| `OPENAI_API_KEY` | — | Used by the sidecar. Settings-first (forwarded from the extension; `.env` is the fallback). |
 | `EMAIL_SIGNAL_PORT` | `3030` | Sidecar listen port. |
-| `EMAIL_SIGNAL_MODEL` | `gpt-4.1-mini` | Model for both agents. |
+| `EMAIL_SIGNAL_MODEL` | `gpt-4.1-mini` | Model for both agents. Settings-first. |
 | `EMAIL_SIGNAL_BATCH_SIZE` | `25` | Candidates per parallel classifier call. |
 | `REDIS_URL` | — | Enables the classify cache + cross-device preferences. Falls back to a local JSON store (`.data/memory.json`). |
-| `WANDB_API_KEY` | — | Enables W&B Weave tracing. Without it, tracing is a silent pass-through. |
-| `WANDB_PROJECT` | `email-signal` | Weave project name. |
+| `WANDB_API_KEY` | — | Enables W&B Weave tracing. Settings-first. Without it, tracing is a silent pass-through. |
+| `WANDB_PROJECT` | `email-signal` | Weave project name. Settings-first. |
 | `EMAIL_SIGNAL_SEND_FULL_BODIES` | `false` | When false, only ~512-char snippets reach the model. |
 | `EMAIL_SIGNAL_DRY_RUN` | `true` | Extension dry-run toggle also lives in Settings. |
 | `EMAIL_SIGNAL_NOTIFY_INTERVAL_MIN` | `30` | Service-worker notification cadence; `0` disables. |

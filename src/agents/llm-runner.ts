@@ -10,7 +10,7 @@ import {
 import { AGENT_NAMES } from './agent-defs';
 import { recordTrace } from '@/weave/tracing';
 import { sseFetch, isServerHealthy } from '@/common/server-client';
-import { getOpenAIKey } from './runtime';
+import { getOpenAIKey, getClientSettings } from './runtime';
 import { STORAGE_KEYS } from '@/common/constants';
 import { AccountIdentitySchema } from '@schemas/index';
 
@@ -74,6 +74,9 @@ export async function classifyViaSidecar(
   preferences?: UserPreference[]
 ): Promise<ClassifyResult> {
   const apiKey = await preflight();
+  // Settings-first: forward all overrides (key, model, Weave) in `settings`. The
+  // top-level apiKey is kept for older-server compat.
+  const settings = await getClientSettings();
   const account = await getAccountEmail();
   const clutter: ClutterFinding[] = [];
   const decisions: Decision[] = [];
@@ -83,6 +86,7 @@ export async function classifyViaSidecar(
     turnId,
     candidates,
     apiKey,
+    settings,
     account,
     preferences,
   })) {
@@ -121,11 +125,13 @@ export async function chatViaSidecar(
   context?: { recentClutter?: ClutterFinding[]; recentDecisions?: Decision[] }
 ): Promise<string> {
   const apiKey = await preflight();
+  const settings = await getClientSettings();
   let text: string | undefined;
   for await (const ev of sseFetch('/orchestrate/chat', {
     turnId,
     message: userMessage,
     apiKey,
+    settings,
     context,
   })) {
     if (ev.type === 'trace') {

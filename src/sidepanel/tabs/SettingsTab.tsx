@@ -31,17 +31,35 @@ export function SettingsTab(): JSX.Element {
   const [serverStatus, setServerStatus] = useState<ServerStatus>({ state: 'idle' });
   const [apiKey, setApiKey] = useState('');
   const [keySaved, setKeySaved] = useState(false);
+  const [model, setModel] = useState('');
+  const [modelSaved, setModelSaved] = useState(false);
+  const [wandbApiKey, setWandbApiKey] = useState('');
+  const [wandbKeySaved, setWandbKeySaved] = useState(false);
+  const [wandbProject, setWandbProject] = useState('');
+  const [wandbProjectSaved, setWandbProjectSaved] = useState(false);
 
-  // Load saved server URL + OpenAI key once.
+  // Load saved server URL + Settings-first config once.
   useEffect(() => {
     if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
     void chrome.storage.local
-      .get([STORAGE_KEYS.serverUrl, STORAGE_KEYS.apiKey])
+      .get([
+        STORAGE_KEYS.serverUrl,
+        STORAGE_KEYS.apiKey,
+        STORAGE_KEYS.model,
+        STORAGE_KEYS.wandbApiKey,
+        STORAGE_KEYS.wandbProject,
+      ])
       .then((v) => {
         const stored = v[STORAGE_KEYS.serverUrl] as string | undefined;
         if (stored?.trim()) setServerUrl(stored.trim());
         const key = v[STORAGE_KEYS.apiKey] as string | undefined;
         if (key) setApiKey(key);
+        const m = v[STORAGE_KEYS.model] as string | undefined;
+        if (m) setModel(m);
+        const wk = v[STORAGE_KEYS.wandbApiKey] as string | undefined;
+        if (wk) setWandbApiKey(wk);
+        const wp = v[STORAGE_KEYS.wandbProject] as string | undefined;
+        if (wp) setWandbProject(wp);
       });
   }, []);
 
@@ -50,6 +68,27 @@ export function SettingsTab(): JSX.Element {
     await chrome.storage.local.set({ [STORAGE_KEYS.apiKey]: next.trim() });
     setKeySaved(true);
     setTimeout(() => setKeySaved(false), 1500);
+  };
+
+  const saveModel = async (next: string) => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    await chrome.storage.local.set({ [STORAGE_KEYS.model]: next.trim() });
+    setModelSaved(true);
+    setTimeout(() => setModelSaved(false), 1500);
+  };
+
+  const saveWandbApiKey = async (next: string) => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    await chrome.storage.local.set({ [STORAGE_KEYS.wandbApiKey]: next.trim() });
+    setWandbKeySaved(true);
+    setTimeout(() => setWandbKeySaved(false), 1500);
+  };
+
+  const saveWandbProject = async (next: string) => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    await chrome.storage.local.set({ [STORAGE_KEYS.wandbProject]: next.trim() });
+    setWandbProjectSaved(true);
+    setTimeout(() => setWandbProjectSaved(false), 1500);
   };
 
   const saveServerUrl = async (next: string) => {
@@ -171,8 +210,9 @@ export function SettingsTab(): JSX.Element {
           </div>
           <div className="hint">
             Sent to your sidecar, which uses it with the OpenAI Agents SDK — never used for
-            direct calls from the browser. Stored only in this browser. Leave blank to use
-            the key in <code>server/.env</code> instead.
+            direct calls from the browser. Stored only in this browser. This setting takes
+            precedence; leave blank to fall back to <code>OPENAI_API_KEY</code> in{' '}
+            <code>server/.env</code>.
           </div>
           <input
             className="input"
@@ -187,6 +227,98 @@ export function SettingsTab(): JSX.Element {
           />
         </div>
         <button onClick={() => saveApiKey(apiKey)} className={apiKey ? 'success' : undefined}>
+          Save
+        </button>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="label">Model</div>
+            {model && <span className="pill success">{modelSaved ? 'saved' : 'set'}</span>}
+          </div>
+          <div className="hint">
+            Chat model the sidecar uses. Leave blank to use <code>EMAIL_SIGNAL_MODEL</code> in{' '}
+            <code>server/.env</code> (default <code>gpt-4.1-mini</code>).
+          </div>
+          <input
+            className="input"
+            type="text"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={() => saveModel(model)}
+            style={{ marginTop: 6 }}
+            placeholder="gpt-4.1-mini"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <button onClick={() => saveModel(model)} className={model ? 'success' : undefined}>
+          Save
+        </button>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="label">Weave API key</div>
+            {wandbApiKey && (
+              <span className="pill success">{wandbKeySaved ? 'saved' : 'set'}</span>
+            )}
+          </div>
+          <div className="hint">
+            W&amp;B Weave observability key, forwarded to your sidecar. Leave blank to use{' '}
+            <code>WANDB_API_KEY</code> in <code>server/.env</code>. Changing the Weave project
+            takes effect after a server restart.
+          </div>
+          <input
+            className="input"
+            type="password"
+            value={wandbApiKey}
+            onChange={(e) => setWandbApiKey(e.target.value)}
+            onBlur={() => saveWandbApiKey(wandbApiKey)}
+            style={{ marginTop: 6 }}
+            placeholder="W&B key"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <button
+          onClick={() => saveWandbApiKey(wandbApiKey)}
+          className={wandbApiKey ? 'success' : undefined}
+        >
+          Save
+        </button>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="label">Weave project</div>
+            {wandbProject && (
+              <span className="pill success">{wandbProjectSaved ? 'saved' : 'set'}</span>
+            )}
+          </div>
+          <div className="hint">
+            W&amp;B project for traces. Leave blank to use <code>WANDB_PROJECT</code> in{' '}
+            <code>server/.env</code> (default <code>email-signal</code>).
+          </div>
+          <input
+            className="input"
+            type="text"
+            value={wandbProject}
+            onChange={(e) => setWandbProject(e.target.value)}
+            onBlur={() => saveWandbProject(wandbProject)}
+            style={{ marginTop: 6 }}
+            placeholder="email-signal"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <button
+          onClick={() => saveWandbProject(wandbProject)}
+          className={wandbProject ? 'success' : undefined}
+        >
           Save
         </button>
       </div>

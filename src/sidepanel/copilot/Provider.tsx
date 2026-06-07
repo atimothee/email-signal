@@ -30,19 +30,31 @@ Be concise. If you don't know, or can't find a matching decision to act on, say 
 
 export function CopilotProvider({ children }: Props): JSX.Element {
   const [runtimeUrl, setRuntimeUrl] = useState<string>('http://localhost:3030/copilotkit');
+  // Settings-first: forward the OpenAI key + model to /copilotkit as headers so
+  // the runtime uses the user's own key/model (falls back to server env when
+  // these are empty). See server/index.ts /copilotkit (x-openai-key / x-model).
+  const [headers, setHeaders] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
-    void chrome.storage.local.get(STORAGE_KEYS.serverUrl).then((v) => {
-      const stored = v[STORAGE_KEYS.serverUrl] as string | undefined;
-      if (stored?.trim()) {
-        setRuntimeUrl(stored.replace(/\/$/, '') + '/copilotkit');
-      }
-    });
+    void chrome.storage.local
+      .get([STORAGE_KEYS.serverUrl, STORAGE_KEYS.apiKey, STORAGE_KEYS.model])
+      .then((v) => {
+        const stored = v[STORAGE_KEYS.serverUrl] as string | undefined;
+        if (stored?.trim()) {
+          setRuntimeUrl(stored.replace(/\/$/, '') + '/copilotkit');
+        }
+        const next: Record<string, string> = {};
+        const key = (v[STORAGE_KEYS.apiKey] as string | undefined)?.trim();
+        const model = (v[STORAGE_KEYS.model] as string | undefined)?.trim();
+        if (key) next['x-openai-key'] = key;
+        if (model) next['x-model'] = model;
+        setHeaders(next);
+      });
   }, []);
 
   return (
-    <CopilotKit runtimeUrl={runtimeUrl} showDevConsole={false}>
+    <CopilotKit runtimeUrl={runtimeUrl} headers={headers} showDevConsole={false}>
       {children}
     </CopilotKit>
   );
