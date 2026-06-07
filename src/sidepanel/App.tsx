@@ -21,18 +21,20 @@ export function App(): JSX.Element {
   useExtensionBridge();
   const [tab, setTab] = useState<TabId>('today');
   const [overlay, setOverlay] = useState<Overlay>(null);
-  const [scanSpin, setScanSpin] = useState(false);
   const killSwitch = usePanelStore((s) => s.killSwitch);
   const dryRun = usePanelStore((s) => s.dryRun);
   const lastError = usePanelStore((s) => s.lastError);
+  const scanStatus = usePanelStore((s) => s.scanStatus);
+
+  // Honest spinner: spins only while real work is happening (issue #7 fix).
+  const scanning = scanStatus === 'reading' || scanStatus === 'thinking';
 
   const statusTone = killSwitch ? 'critical' : dryRun ? 'warn' : '';
   const statusLabel = killSwitch ? 'Kill switch' : dryRun ? 'Dry run' : 'Live';
 
   const handleScan = () => {
-    setScanSpin(true);
+    if (scanning) return;
     send({ kind: 'panel/request_scan' });
-    setTimeout(() => setScanSpin(false), 900);
   };
 
   useEffect(() => {
@@ -56,8 +58,8 @@ export function App(): JSX.Element {
         </div>
         <div className="brand-actions">
           <IconButton
-            label="Scan now"
-            spinning={scanSpin}
+            label={scanning ? 'Scanning…' : 'Scan now'}
+            spinning={scanning}
             onClick={handleScan}
             icon={
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">

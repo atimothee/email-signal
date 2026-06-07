@@ -39,6 +39,15 @@ onMessage(async (msg, sender) => {
         log.info('content ready on tab', sender.tab?.id);
         return;
       }
+      case 'content/scan_progress': {
+        await broadcastToPanel({
+          kind: 'bg/scan_progress',
+          phase: 'reading',
+          loaded: msg.loaded,
+          target: msg.target,
+        });
+        return;
+      }
       case 'content/scan_result': {
         await runOrchestratorTurn({ trigger: 'scan', scan: msg.scan, sourceTabId: sender.tab?.id });
         return;
@@ -97,6 +106,12 @@ onMessage(async (msg, sender) => {
             delivered++;
           }
         }
+        if (delivered > 0) {
+          // Announce the turn immediately so the panel shows a real "reading"
+          // state the instant the user clicks Scan — not a fake spinner.
+          await broadcastToPanel({ kind: 'bg/turn_started', trigger: 'scan' });
+          await broadcastToPanel({ kind: 'bg/scan_progress', phase: 'reading', loaded: 0 });
+        }
         if (delivered === 0) {
           await broadcastToPanel({
             kind: 'bg/error',
@@ -107,6 +122,14 @@ onMessage(async (msg, sender) => {
             kind: 'error',
             message: 'Gmail tab found but content script unreachable',
           });
+        }
+        return;
+      }
+      case 'panel/highlight': {
+        // Forward a highlight request from the panel to the Gmail tab(s).
+        const tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
+        for (const t of tabs) {
+          if (t.id) await sendToTab(t.id, { kind: 'bg/highlight', selector: msg.selector });
         }
         return;
       }

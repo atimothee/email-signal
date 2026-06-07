@@ -60,6 +60,41 @@ function buildRowSelector(row: HTMLElement, index: number): string {
   return `tr.zA:nth-of-type(${index + 1})`;
 }
 
+/** Extract a single inbox row into an EmailCandidate (null on failure). */
+function extractRow(row: HTMLElement, idx: number, warnings: string[]): EmailCandidate | null {
+  try {
+    const subject = row.querySelector(SUBJECT_SELECTOR)?.textContent?.trim() ?? '';
+    const senderEl = row.querySelector(SENDER_SELECTOR);
+    const from = extractAddress(senderEl);
+    const snippet = row.querySelector(SNIPPET_SELECTOR)?.textContent?.trim() ?? '';
+    const isUnread = row.classList.contains(UNREAD_CLASS);
+    const isStarred = !!row.querySelector(STARRED_SELECTOR);
+    const idAttr =
+      row.getAttribute('data-legacy-message-id') ??
+      row.getAttribute('data-legacy-thread-id') ??
+      hash(`${from.email}|${subject}|${snippet}`);
+    const threadAttr = row.getAttribute('data-legacy-thread-id') ?? idAttr;
+    const unsubLinks = findUnsubscribeLinks(row);
+    return EmailCandidateSchema.parse({
+      id: idAttr,
+      threadId: threadAttr,
+      provider: 'gmail',
+      from,
+      subject,
+      snippet,
+      bodyExcerpt: snippet, // inbox rows don't expose body
+      isUnread,
+      isStarred,
+      hasUnsubscribeLink: unsubLinks.length > 0,
+      unsubscribeLinkHrefs: unsubLinks,
+      domAnchor: { rowSelector: buildRowSelector(row, idx) },
+    });
+  } catch (err) {
+    warnings.push(`row ${idx}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 export async function scanGmailDom(
   source: 'inbox' | 'search' | 'thread'
 ): Promise<ScanResult> {
@@ -74,37 +109,8 @@ export async function scanGmailDom(
       warnings.push('No inbox rows found. Is Gmail finished loading?');
     }
     rows.slice(0, DEFAULTS.maxCandidatesPerScan).forEach((row, idx) => {
-      try {
-        const subject = row.querySelector(SUBJECT_SELECTOR)?.textContent?.trim() ?? '';
-        const senderEl = row.querySelector(SENDER_SELECTOR);
-        const from = extractAddress(senderEl);
-        const snippet = row.querySelector(SNIPPET_SELECTOR)?.textContent?.trim() ?? '';
-        const isUnread = row.classList.contains(UNREAD_CLASS);
-        const isStarred = !!row.querySelector(STARRED_SELECTOR);
-        const idAttr =
-          row.getAttribute('data-legacy-message-id') ??
-          row.getAttribute('data-legacy-thread-id') ??
-          hash(`${from.email}|${subject}|${snippet}`);
-        const threadAttr = row.getAttribute('data-legacy-thread-id') ?? idAttr;
-        const unsubLinks = findUnsubscribeLinks(row);
-        const candidate = EmailCandidateSchema.parse({
-          id: idAttr,
-          threadId: threadAttr,
-          provider: 'gmail',
-          from,
-          subject,
-          snippet,
-          bodyExcerpt: snippet, // inbox rows don't expose body
-          isUnread,
-          isStarred,
-          hasUnsubscribeLink: unsubLinks.length > 0,
-          unsubscribeLinkHrefs: unsubLinks,
-          domAnchor: { rowSelector: buildRowSelector(row, idx) },
-        });
-        candidates.push(candidate);
-      } catch (err) {
-        warnings.push(`row ${idx}: ${(err as Error).message}`);
-      }
+      const c = extractRow(row, idx, warnings);
+      if (c) candidates.push(c);
     });
   }
 
@@ -118,6 +124,99 @@ export async function scanGmailDom(
     warnings,
   });
   log.info('gmail scan', { count: candidates.length, warnings: warnings.length });
+  return scan;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Find the nearest scrollable ancestor that actually scrolls the inbox list. */
+function findScrollContainer(el: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = el.parentElement;
+  while (node && node !== document.body) {
+    const style = getComputedStyle(node);
+    const scrollable = /(auto|scroll)/.test(style.overflowY);
+    if (scrollable && node.scrollHeight > node.clientHeight + 40) return node;
+    node = node.parentElement;
+  }
+  return (document.scrollingElement as HTMLElement) ?? null;
+}
+
+/**
+ * Deep inbox scan: Gmail virtualizes rows (off-screen rows leave the DOM), so a
+ * single pass only sees ~50. We scroll the list in steps, accumulating unique
+ * candidates by id, until we reach `target` or the list stops growing — then
+ * restore the user's original scroll position. Progress is reported via
+ * `onProgress` so the side panel can show "Reading 320/500…".
+ */
+export async function scanGmailInboxDeep(
+  target: number,
+  onProgress?: (loaded: number) => void
+): Promise<ScanResult> {
+  const warnings: string[] = [];
+  const byId = new Map<string, EmailCandidate>();
+
+  const firstRow = document.querySelector(ROW_SELECTOR) as HTMLElement | null;
+  if (!firstRow) {
+    warnings.push('No inbox rows found. Is Gmail finished loading?');
+    return ScanResultSchema.parse({
+      provider: 'gmail',
+      scannedAt: new Date().toISOString(),
+      source: 'inbox',
+      pageUrl: location.href,
+      candidates: [],
+      threads: [],
+      warnings,
+    });
+  }
+
+  const scroller = findScrollContainer(firstRow);
+  const startTop = scroller?.scrollTop ?? 0;
+  let idx = 0;
+  let stagnant = 0;
+
+  try {
+    for (let i = 0; i < DEFAULTS.deepScanMaxScrolls; i++) {
+      const rows = Array.from(document.querySelectorAll(ROW_SELECTOR)) as HTMLElement[];
+      const before = byId.size;
+      for (const row of rows) {
+        const c = extractRow(row, idx++, warnings);
+        if (c && !byId.has(c.id)) byId.set(c.id, c);
+      }
+      onProgress?.(byId.size);
+
+      if (byId.size >= target) break;
+      if (byId.size === before) {
+        if (++stagnant >= 3) break; // list isn't growing — we've hit the end
+      } else {
+        stagnant = 0;
+      }
+      if (!scroller) break;
+
+      const prevTop = scroller.scrollTop;
+      scroller.scrollTop = Math.min(
+        scroller.scrollHeight,
+        scroller.scrollTop + Math.max(200, scroller.clientHeight * 0.9)
+      );
+      if (scroller.scrollTop === prevTop && byId.size === before) {
+        if (++stagnant >= 3) break;
+      }
+      await sleep(280); // let Gmail render the next window of rows
+    }
+  } finally {
+    if (scroller) scroller.scrollTop = startTop; // put the user back where they were
+  }
+
+  const candidates = Array.from(byId.values()).slice(0, target);
+  const scan = ScanResultSchema.parse({
+    provider: 'gmail',
+    scannedAt: new Date().toISOString(),
+    source: 'inbox',
+    pageUrl: location.href,
+    candidates,
+    threads: [],
+    warnings,
+  });
+  log.info('gmail deep scan', { count: candidates.length, warnings: warnings.length });
   return scan;
 }
 

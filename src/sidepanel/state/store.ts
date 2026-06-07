@@ -5,6 +5,7 @@ import type {
   ClutterFinding,
   ClutterSenderGroup,
   DailyBrief,
+  Decision,
   ExtMessage,
   MemorySuggestion,
   PriorityFinding,
@@ -12,12 +13,18 @@ import type {
   ScanResult,
 } from '@schemas/index';
 
+/** Honest scan lifecycle — drives the Ambient Pulse and Today states. */
+export type ScanStatus = 'idle' | 'reading' | 'thinking' | 'done' | 'error';
+
 interface PanelState {
   apiKey: string;
   dryRun: boolean;
   killSwitch: boolean;
 
   scan: ScanResult | null;
+  scanStatus: ScanStatus;
+  scanProgress: { loaded: number; target: number };
+  decisions: Decision[];
   clutter: ClutterFinding[];
   groups: ClutterSenderGroup[];
   priorities: PriorityFinding[];
@@ -41,6 +48,9 @@ export const usePanelStore = create<PanelState>((set) => ({
   dryRun: true,
   killSwitch: false,
   scan: null,
+  scanStatus: 'idle',
+  scanProgress: { loaded: 0, target: 0 },
+  decisions: [],
   clutter: [],
   groups: [],
   priorities: [],
@@ -55,6 +65,30 @@ export const usePanelStore = create<PanelState>((set) => ({
       switch (msg.kind) {
         case 'bg/scan_complete':
           return { scan: msg.scan };
+        case 'bg/turn_started':
+          // A fresh scan clears stale results so the user never sees old data
+          // while we re-read. Other triggers just show a working state.
+          return msg.trigger === 'scan'
+            ? {
+                scanStatus: 'reading',
+                scanProgress: { loaded: 0, target: 0 },
+                decisions: [],
+                groups: [],
+                lastError: null,
+              }
+            : { scanStatus: 'thinking' };
+        case 'bg/scan_progress':
+          return {
+            scanStatus: msg.phase,
+            scanProgress: {
+              loaded: msg.loaded,
+              target: msg.target ?? s.scanProgress.target,
+            },
+          };
+        case 'bg/turn_done':
+          return { scanStatus: msg.ok ? 'done' : 'error' };
+        case 'bg/decisions':
+          return { decisions: msg.decisions };
         case 'bg/classification':
           return {
             clutter: msg.clutter,
@@ -82,7 +116,7 @@ export const usePanelStore = create<PanelState>((set) => ({
           // Legacy reply path; CopilotKit renders chat now. Ignored.
           return {};
         case 'bg/error':
-          return { lastError: msg.message };
+          return { lastError: msg.message, scanStatus: 'error' };
         default:
           return {};
       }
