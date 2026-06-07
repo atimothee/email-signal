@@ -13,8 +13,8 @@ import {
 } from '@copilotkit/runtime';
 import {
   ClutterFindingSchema,
+  DecisionSchema,
   EmailCandidateSchema,
-  PriorityFindingSchema,
 } from '../src/schemas/index.js';
 import { runAgentClassification, runAgentChat, initServerWeave } from './agents.js';
 import type { SseWriter } from './trace-bridge.js';
@@ -49,23 +49,26 @@ app.get('/health', (c) =>
 
 const ClassifyBody = z.object({
   turnId: z.string().optional(),
-  candidates: z.array(EmailCandidateSchema).min(1).max(200),
+  candidates: z.array(EmailCandidateSchema).min(1).max(1000),
+  /** OpenAI key forwarded from the extension Settings; used here, never sent on. */
+  apiKey: z.string().optional(),
 });
 
-// ---- Classify (SSE) ----
-// Body: { turnId, candidates }
+// ---- Classify + synthesize (SSE) ----
+// Body: { turnId, candidates, apiKey? }
 // Stream events:
-//   event: trace        data: AgentTraceEvent JSON
-//   event: classification data: { clutter: [...], priorities: [...] }
-//   event: error        data: { message }
-//   event: done         data: { ok: true }
+//   event: trace          data: AgentTraceEvent JSON
+//   event: classification data: { clutter: [...] }
+//   event: decisions      data: { decisions: [...] }
+//   event: error          data: { message }
+//   event: done           data: { ok: true }
 app.post('/orchestrate/classify', async (c) => {
   const json = await c.req.json().catch(() => null);
   const parsed = ClassifyBody.safeParse(json);
   if (!parsed.success) {
     return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
   }
-  const { turnId = nanoid(), candidates } = parsed.data;
+  const { turnId = nanoid(), candidates, apiKey } = parsed.data;
 
   return streamSSE(c, async (stream) => {
     const writer: SseWriter = {
@@ -74,11 +77,9 @@ app.post('/orchestrate/classify', async (c) => {
       },
     };
     try {
-      const result = await runAgentClassification({ turnId, candidates, writer });
-      await writer.send('classification', {
-        clutter: result.clutter,
-        priorities: result.priorities,
-      });
+      const result = await runAgentClassification({ turnId, candidates, writer, apiKey });
+      await writer.send('classification', { clutter: result.clutter });
+      await writer.send('decisions', { decisions: result.decisions });
       await writer.send('done', { ok: true });
     } catch (err) {
       const message = (err as Error).message ?? 'unknown error';
@@ -91,11 +92,12 @@ app.post('/orchestrate/classify', async (c) => {
 const ChatBody = z.object({
   turnId: z.string().optional(),
   message: z.string().min(1).max(8000),
-  /** Optional recent ledger/preferences context the client gives the server. */
+  apiKey: z.string().optional(),
+  /** Optional recent inbox context the client gives the server. */
   context: z
     .object({
       recentClutter: z.array(ClutterFindingSchema).max(50).optional(),
-      recentPriorities: z.array(PriorityFindingSchema).max(50).optional(),
+      recentDecisions: z.array(DecisionSchema).max(50).optional(),
     })
     .optional(),
 });
@@ -112,7 +114,7 @@ app.post('/orchestrate/chat', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
   }
-  const { turnId = nanoid(), message, context } = parsed.data;
+  const { turnId = nanoid(), message, context, apiKey } = parsed.data;
   return streamSSE(c, async (stream) => {
     const writer: SseWriter = {
       send: async (event, data) => {
@@ -120,7 +122,7 @@ app.post('/orchestrate/chat', async (c) => {
       },
     };
     try {
-      const text = await runAgentChat({ turnId, message, context, writer });
+      const text = await runAgentChat({ turnId, message, context, writer, apiKey });
       await writer.send('chat_reply', { text });
       await writer.send('done', { ok: true });
     } catch (err) {

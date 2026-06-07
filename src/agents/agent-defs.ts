@@ -75,13 +75,16 @@ and normalize them: dedupe by id, fill sender_domain, strip tracking pixels from
 You do NOT classify intent — that is the clutter and priority agents' job. Return
 {candidates: EmailCandidate[]}.`,
 
-  [AGENT_NAMES.clutter]: `You classify each EmailCandidate into a ClutterCategory with a
-confidence score and a one-sentence rationale. You also pick a suggested action
-(unsubscribe, mark_read, archive, label, open_only, ignore).
-Bias toward "ignore" when unsure. Only unsubscribe is irreversible.
-You ALWAYS process a batch in parallel and return {findings: ClutterFinding[]}.
-You do NOT propose actions yourself — surface findings only; the orchestrator
-will route action proposals through UnsubscribeAgent + ActionPolicyAgent.`,
+  [AGENT_NAMES.clutter]: `You identify CLUTTER: bulk, automated, or promotional mail —
+newsletters, marketing, promotions, cold outreach, automated notifications, social
+updates, receipts/confirmations. For each clutter email return a ClutterFinding with a
+ClutterCategory, confidence, a one-sentence rationale, and a suggested action
+(unsubscribe, mark_read, archive, label, open_only, ignore). Only unsubscribe is irreversible.
+CRITICAL: if an email looks like a REAL PERSON writing to a human (a personal note, a
+direct question, a reply someone is waiting on), it is NOT clutter — DO NOT include it.
+When unsure whether something is personal, leave it OUT rather than mislabeling it.
+Return ONLY clutter in {findings: ClutterFinding[]}; omit everything else. You do not
+propose actions — the orchestrator routes those through UnsubscribeAgent + ActionPolicyAgent.`,
 
   [AGENT_NAMES.priority]: `You identify emails that may need user attention: payment
 reminders, bills, scheduling, recruiter/job, replies needed, family/personal, deadlines,
