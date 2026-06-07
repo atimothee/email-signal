@@ -45,6 +45,8 @@ export class SidecarError extends Error {
 export interface ClassifyResult {
   clutter: ClutterFinding[];
   decisions: Decision[];
+  /** One-sentence "here's your day" synthesis from the sidecar, '' if nothing. */
+  summary: string;
 }
 
 async function preflight(): Promise<string | undefined> {
@@ -75,6 +77,7 @@ export async function classifyViaSidecar(
   const account = await getAccountEmail();
   const clutter: ClutterFinding[] = [];
   const decisions: Decision[] = [];
+  let summary = '';
 
   for await (const ev of sseFetch('/orchestrate/classify', {
     turnId,
@@ -96,6 +99,7 @@ export async function classifyViaSidecar(
         const r = DecisionSchema.safeParse(d);
         if (r.success) decisions.push(r.data);
       }
+      if (typeof ev.data.summary === 'string') summary = ev.data.summary;
     } else if (ev.type === 'error') {
       await recordTrace({
         kind: 'error',
@@ -107,7 +111,7 @@ export async function classifyViaSidecar(
     }
   }
 
-  return { clutter, decisions };
+  return { clutter, decisions, summary };
 }
 
 /** Ask the sidecar a chat question about the inbox. */

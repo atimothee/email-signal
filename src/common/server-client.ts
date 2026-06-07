@@ -16,7 +16,7 @@ import { STORAGE_KEYS } from './constants';
 export type ServerEvent =
   | { type: 'trace'; data: any }
   | { type: 'classification'; data: { clutter: unknown[] } }
-  | { type: 'decisions'; data: { decisions: unknown[] } }
+  | { type: 'decisions'; data: { decisions: unknown[]; summary?: string } }
   | { type: 'chat_reply'; data: { text: string } }
   | { type: 'error'; data: { message: string } }
   | { type: 'done'; data: { ok: boolean } };

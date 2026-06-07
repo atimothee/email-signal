@@ -284,6 +284,22 @@ onMessage(async (msg, sender) => {
         await chrome.storage.local.set({ [STORAGE_KEYS.preferences]: existing });
         return;
       }
+      case 'panel/decision_action': {
+        // Persist a per-decision disposition keyed by emailId so a re-scan
+        // honours it. 'restore' (undo) clears it. Keyed to match the
+        // orchestrator's DECISION_STATE_KEY filter.
+        const key = 'emailsignal_decision_state';
+        const state =
+          ((await chrome.storage.local.get(key))[key] as
+            | Record<string, { status: 'handled' | 'snoozed'; until?: number }>
+            | undefined) ?? {};
+        for (const emailId of msg.emailIds) {
+          if (msg.action === 'restore') delete state[emailId];
+          else state[emailId] = { status: msg.action === 'handled' ? 'handled' : 'snoozed', until: msg.untilMs };
+        }
+        await chrome.storage.local.set({ [key]: state });
+        return;
+      }
       case 'panel/batch_approve': {
         for (const id of msg.proposedActionIds) {
           await runOrchestratorTurn({

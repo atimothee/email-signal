@@ -88,6 +88,19 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('panel/kill_switch'), enabled: z.boolean() }),
   z.object({ kind: z.literal('panel/set_dry_run'), enabled: z.boolean() }),
   z.object({ kind: z.literal('panel/save_preference'), preference: UserPreferenceSchema }),
+  /**
+   * User dispositions a synthesized decision: marks it handled (suppress for
+   * good), snoozes it (suppress until untilMs), or restores it (undo). Keyed by
+   * the decision's emailIds so a re-scan honours it. Not a Gmail mutation — this
+   * only affects what EmailSignal surfaces, so no approval card is required.
+   */
+  z.object({
+    kind: z.literal('panel/decision_action'),
+    action: z.enum(['handled', 'snooze', 'restore']),
+    decisionId: z.string(),
+    emailIds: z.array(z.string()).default([]),
+    untilMs: z.number().optional(),
+  }),
 
   // background -> sidepanel
   z.object({ kind: z.literal('bg/scan_complete'), scan: ScanResultSchema }),
@@ -109,6 +122,8 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('bg/decisions'),
     decisions: z.array(DecisionSchema),
+    /** One-sentence "here's your day" synthesis across the decisions. */
+    summary: z.string().optional(),
   }),
   z.object({
     kind: z.literal('bg/classification'),

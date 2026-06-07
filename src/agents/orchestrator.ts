@@ -157,7 +157,7 @@ async function handleScan(scan: ScanResult, ctx: AgentContext): Promise<void> {
       preferences: ctx.preferences,
     })
   );
-  const { decisions, clutter } = await classifyViaSidecar(ctx.turnId, scan.candidates, ctx.preferences);
+  const { decisions, clutter, summary } = await classifyViaSidecar(ctx.turnId, scan.candidates, ctx.preferences);
   await recordTrace({
     kind: 'agent_end',
     agent: AGENT_NAMES.priority,
@@ -165,11 +165,13 @@ async function handleScan(scan: ScanResult, ctx: AgentContext): Promise<void> {
     message: `${decisions.length} decision(s), ${clutter.length} clutter`,
   });
 
-  // 3) Apply preference filters (ignored_sender — never surface as a decision).
-  const filtered = filterDecisionsByPreferences(decisions, ctx);
+  // 3) Apply preference filters (ignored_sender) + user dispositions
+  //    (decisions the user marked handled, or snoozed until later).
+  const prefFiltered = filterDecisionsByPreferences(decisions, ctx);
+  const filtered = await filterDispositionedDecisions(prefFiltered);
 
   const groups = groupClutter(clutter, scan.candidates);
-  await broadcast({ kind: 'bg/decisions', decisions: filtered });
+  await broadcast({ kind: 'bg/decisions', decisions: filtered, summary });
   await broadcast({
     kind: 'bg/classification',
     clutter,
@@ -409,6 +411,35 @@ async function runMemoryAgent(ctx: AgentContext): Promise<AgentRunResult<typeof 
 }
 
 // ---------------- Preference filtering ----------------
+
+/** chrome.storage key for per-decision user dispositions (handled / snoozed).
+ *  Shared with the service worker's `panel/decision_action` handler. */
+const DECISION_STATE_KEY = 'emailsignal_decision_state';
+interface DecisionDisposition {
+  status: 'handled' | 'snoozed';
+  until?: number;
+}
+
+/**
+ * Drop decisions the user has dispositioned. A decision is suppressed only when
+ * EVERY email folded into it is handled (forever) or snoozed (until its time),
+ * so a multi-email decision that picks up a fresh message still surfaces.
+ */
+async function filterDispositionedDecisions(decisions: Decision[]): Promise<Decision[]> {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return decisions;
+  const state =
+    ((await chrome.storage.local.get(DECISION_STATE_KEY))[DECISION_STATE_KEY] as
+      | Record<string, DecisionDisposition>
+      | undefined) ?? {};
+  const now = Date.now();
+  const suppressed = (emailId: string): boolean => {
+    const d = state[emailId];
+    if (!d) return false;
+    if (d.status === 'handled') return true;
+    return d.status === 'snoozed' && (d.until ?? 0) > now;
+  };
+  return decisions.filter((d) => d.emailIds.length === 0 || !d.emailIds.every(suppressed));
+}
 
 function filterDecisionsByPreferences(decisions: Decision[], ctx: AgentContext): Decision[] {
   const ignored = new Set(
