@@ -1,55 +1,139 @@
 import React from 'react';
 import { usePanelStore } from '../state/store';
-import { ClutterSenderGroupCard } from '../cards/ClutterSenderGroupCard';
-import { EmptyState } from '../cards/primitives';
+import { CleanupThemeCard } from '../cards/CleanupThemeCard';
+import { EmptyState, Skeleton, ErrorState } from '../cards/primitives';
 import { send } from '../state/bridge';
+import type { ClutterCategory, ClutterSenderGroup, ProposedAction } from '@schemas/index';
+
+/** Order themes by how worth-acting-on they are. */
+const CATEGORY_ORDER: ClutterCategory[] = [
+  'promotion',
+  'marketing',
+  'newsletter',
+  'cold_outreach',
+  'social_update',
+  'automated_notification',
+  'repeat_sender_low_signal',
+  'receipt_or_confirmation',
+  'other',
+];
+
+function pendingUnsubByDomain(actions: Record<string, ProposedAction>): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const a of Object.values(actions)) {
+    if (a.type === 'click_unsubscribe' && a.approvalStatus === 'pending') {
+      const domain = a.params['senderDomain'] as string | undefined;
+      if (domain) map.set(domain, a.id);
+    }
+  }
+  return map;
+}
 
 export function ClutterTab(): JSX.Element {
   const groups = usePanelStore((s) => s.groups);
   const proposedActions = usePanelStore((s) => s.proposedActions);
+  const scanStatus = usePanelStore((s) => s.scanStatus);
+  const lastError = usePanelStore((s) => s.lastError);
+  const removeProposedAction = usePanelStore((s) => s.removeProposedAction);
+
+  const scanning = scanStatus === 'reading' || scanStatus === 'thinking';
+
+  if (groups.length === 0 && scanStatus === 'error') {
+    return (
+      <div>
+        <ErrorState message={lastError ?? 'The EmailSignal sidecar is unavailable.'} />
+        <EmptyState
+          title="Can't reach the sidecar"
+          body="Cleanup needs the local Node sidecar running. Start it with “npm run server”, then scan again."
+          action={{ label: 'Try again', onClick: () => send({ kind: 'panel/request_scan' }) }}
+        />
+      </div>
+    );
+  }
+
+  if (groups.length === 0 && scanning) {
+    return (
+      <div>
+        <div className="subtle" style={{ margin: '6px 0 12px' }}>Sorting the noise…</div>
+        <Skeleton card lines={2} />
+        <Skeleton card lines={2} />
+      </div>
+    );
+  }
 
   if (groups.length === 0) {
     return (
       <EmptyState
         title="A clean inbox"
-        body="Scan your inbox and we'll group noisy senders here so you can unsubscribe in a few clicks."
+        body="Scan your inbox and I'll group noisy senders by theme so you can clear them in a few clicks."
         action={{ label: 'Scan inbox', onClick: () => send({ kind: 'panel/request_scan' }) }}
-        hint="Every unsubscribe needs a per-sender confirmation."
+        hint="Every unsubscribe still needs your per-sender confirmation."
       />
     );
   }
 
+  const pending = pendingUnsubByDomain(proposedActions);
+
+  // Aggregate sender groups by theme.
+  const byCategory = new Map<ClutterCategory, ClutterSenderGroup[]>();
+  for (const g of groups) {
+    const arr = byCategory.get(g.category) ?? [];
+    arr.push(g);
+    byCategory.set(g.category, arr);
+  }
+
   const totalMessages = groups.reduce((acc, g) => acc + g.count, 0);
+  const orderedCategories = CATEGORY_ORDER.filter((c) => byCategory.has(c));
+
+  const approveUnsub = (g: ClutterSenderGroup) => {
+    const id = pending.get(g.senderDomain);
+    if (!id) return;
+    send({
+      kind: 'panel/approve_action',
+      approval: {
+        proposedActionId: id,
+        status: 'approved',
+        approvedAt: new Date().toISOString(),
+        approvedBy: 'user',
+      },
+    });
+    removeProposedAction(id);
+  };
+
+  const muteSender = (g: ClutterSenderGroup) => {
+    send({
+      kind: 'panel/save_preference',
+      preference: {
+        id: `mute:${g.senderDomain}:${Date.now()}`,
+        kind: 'ignored_sender',
+        key: g.senderDomain,
+        value: g.senderDomain,
+        source: 'user_settings',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  };
 
   return (
     <>
       <div className="subtle" style={{ marginTop: 4, marginBottom: 12 }}>
         {groups.length} noisy sender{groups.length === 1 ? '' : 's'} ·{' '}
-        {totalMessages} message{totalMessages === 1 ? '' : 's'}
+        {totalMessages} message{totalMessages === 1 ? '' : 's'} across {orderedCategories.length}{' '}
+        theme{orderedCategories.length === 1 ? '' : 's'}
       </div>
-      {groups.map((g) => {
-        const queued = Object.values(proposedActions).some(
-          (a) =>
-            a.type === 'click_unsubscribe' &&
-            (a.params['senderDomain'] as string | undefined) === g.senderDomain
-        );
+      {orderedCategories.map((category) => {
+        const rows = byCategory
+          .get(category)!
+          .sort((a, b) => b.count - a.count)
+          .map((group) => ({ group, canUnsubscribe: pending.has(group.senderDomain) }));
         return (
-          <ClutterSenderGroupCard
-            key={g.senderDomain}
-            group={g}
-            onUnsubscribe={
-              queued
-                ? undefined
-                : () => send({ kind: 'panel/request_scan' /* re-trigger to ensure proposal */ })
-            }
-            onCorrect={(text) =>
-              send({
-                kind: 'panel/correct_finding',
-                findingId: g.senderDomain,
-                surface: 'clutter',
-                correction: text,
-              })
-            }
+          <CleanupThemeCard
+            key={category}
+            category={category}
+            rows={rows}
+            onUnsubscribe={approveUnsub}
+            onMute={muteSender}
           />
         );
       })}

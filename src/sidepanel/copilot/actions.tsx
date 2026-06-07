@@ -3,6 +3,7 @@ import { useCopilotAction, useCopilotReadable } from '@copilotkit/react-core';
 import { usePanelStore } from '../state/store';
 import { send } from '../state/bridge';
 import { ApprovalActionCard } from '../cards/ApprovalActionCard';
+import { DecisionCard } from '../cards/DecisionCard';
 import { EmailPriorityCard } from '../cards/EmailPriorityCard';
 import { ClutterSenderGroupCard } from '../cards/ClutterSenderGroupCard';
 import { MemorySuggestionCard } from '../cards/MemorySuggestionCard';
@@ -11,7 +12,7 @@ import { ActionLedgerTable } from '../cards/ActionLedgerTable';
 import { AgentTraceTimeline } from '../cards/AgentTraceTimeline';
 import { BatchActionReviewPanel } from '../cards/BatchActionReviewPanel';
 import { Skeleton, ErrorState } from '../cards/primitives';
-import type { ProposedAction } from '@schemas/index';
+import type { Decision, ProposedAction } from '@schemas/index';
 
 /**
  * Register every card component as a CopilotKit generative-UI action so the
@@ -30,13 +31,47 @@ export function useGenerativeUiBindings(): void {
   const proposedActions = usePanelStore((s) => s.proposedActions);
   const ledger = usePanelStore((s) => s.ledger);
   const traceEvents = usePanelStore((s) => s.traceEvents);
+  const decisions = usePanelStore((s) => s.decisions);
   const removeProposedAction = usePanelStore((s) => s.removeProposedAction);
   const dismissMemorySuggestion = usePanelStore((s) => s.dismissMemorySuggestion);
 
   // Expose key store slices to the agent as readable context.
   useCopilotReadable({
+    description:
+      "Today's synthesized decisions — the short list of things the user must act on, " +
+      'each folding one or more emails. This is the product output; prefer answering ' +
+      'inbox questions from here rather than restating raw emails.',
+    value: decisions,
+  });
+
+  useCopilotReadable({
     description: 'Currently pending proposed actions awaiting user approval.',
     value: Object.values(proposedActions).filter((a) => a.approvalStatus === 'pending'),
+  });
+
+  // ── DecisionCard list ───────────────────────────────────────────────
+  useCopilotAction({
+    name: 'show_decisions',
+    description:
+      "Render the user's synthesized decisions as cards in chat. Omit `decisions` to " +
+      'show the current Today list.',
+    parameters: [{ name: 'decisions', type: 'object[]', required: false }],
+    render: ({ status, args }) => {
+      if (status === 'inProgress') return <Skeleton card lines={2} />;
+      const list = ((args?.decisions as Decision[] | undefined) ?? decisions) || [];
+      if (list.length === 0) return <ErrorState message="Nothing pressing today." />;
+      return (
+        <div className="gen-ui-slot">
+          {list.map((d) => (
+            <DecisionCard
+              key={d.id}
+              decision={d}
+              onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
+            />
+          ))}
+        </div>
+      );
+    },
   });
 
   useCopilotReadable({

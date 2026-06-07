@@ -27,18 +27,31 @@ export function SettingsTab(): JSX.Element {
   const [ignoreSender, setIgnoreSender] = useState('');
   const [serverUrl, setServerUrl] = useState(DEFAULT_BASE);
   const [serverStatus, setServerStatus] = useState<ServerStatus>({ state: 'idle' });
+  const [apiKey, setApiKey] = useState('');
+  const [keySaved, setKeySaved] = useState(false);
 
-  // Load saved server URL once.
+  // Load saved server URL + OpenAI key once.
   useEffect(() => {
-    if (typeof chrome === 'undefined') return;
-    void chrome.storage.local.get(STORAGE_KEYS.serverUrl).then((v) => {
-      const stored = v[STORAGE_KEYS.serverUrl] as string | undefined;
-      if (stored?.trim()) setServerUrl(stored.trim());
-    });
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    void chrome.storage.local
+      .get([STORAGE_KEYS.serverUrl, STORAGE_KEYS.apiKey])
+      .then((v) => {
+        const stored = v[STORAGE_KEYS.serverUrl] as string | undefined;
+        if (stored?.trim()) setServerUrl(stored.trim());
+        const key = v[STORAGE_KEYS.apiKey] as string | undefined;
+        if (key) setApiKey(key);
+      });
   }, []);
 
+  const saveApiKey = async (next: string) => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    await chrome.storage.local.set({ [STORAGE_KEYS.apiKey]: next.trim() });
+    setKeySaved(true);
+    setTimeout(() => setKeySaved(false), 1500);
+  };
+
   const saveServerUrl = async (next: string) => {
-    if (typeof chrome === 'undefined') return;
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
     await chrome.storage.local.set({ [STORAGE_KEYS.serverUrl]: next });
   };
 
@@ -104,13 +117,14 @@ export function SettingsTab(): JSX.Element {
       <div className="settings-row">
         <div>
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div className="label">EmailSignal sidecar</div>
+            <div className="label">EmailSignal sidecar (required)</div>
             {statusPill}
           </div>
           <div className="hint">
-            The Node sidecar runs the multi-agent pipeline (OpenAI Agents SDK + W&amp;B Weave +
-            Redis memory). Start it with <code>npm run server</code> from the repo. Your
-            OpenAI API key lives in <code>server/.env</code> — never in the extension.
+            All intelligence runs in a local Node sidecar (OpenAI Agents SDK + W&amp;B
+            Weave + Redis memory). Start it with <code>npm run server</code>. The
+            extension does no AI itself — if the sidecar is unreachable, scanning will
+            show an error.
           </div>
           <input
             className="input"
@@ -145,6 +159,34 @@ export function SettingsTab(): JSX.Element {
           )}
         </div>
         <button onClick={checkServer}>Recheck</button>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="label">OpenAI API key</div>
+            {apiKey && <span className="pill success">{keySaved ? 'saved' : 'set'}</span>}
+          </div>
+          <div className="hint">
+            Sent to your sidecar, which uses it with the OpenAI Agents SDK — never used for
+            direct calls from the browser. Stored only in this browser. Leave blank to use
+            the key in <code>server/.env</code> instead.
+          </div>
+          <input
+            className="input"
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            onBlur={() => saveApiKey(apiKey)}
+            style={{ marginTop: 6 }}
+            placeholder="sk-…"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <button onClick={() => saveApiKey(apiKey)} className={apiKey ? 'success' : undefined}>
+          Save
+        </button>
       </div>
 
       <div className="settings-row">
