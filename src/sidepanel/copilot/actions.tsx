@@ -28,6 +28,14 @@ import { nanoid } from 'nanoid';
  * `renderAndWaitForResponse`) for read-only cards. Cards that require user
  * decisions (Approve/Reject, batch confirm) use `renderAndWaitForResponse` so
  * the agent gets the user's choice back.
+ *
+ * IMPORTANT: read-only display actions must use `available: 'enabled'`, NOT
+ * `'frontend'`. In CopilotKit 1.59.5 `getActionConfig` maps `'enabled'`/`'remote'`
+ * → a frontend tool that is advertised to the model AND renders, whereas
+ * `'frontend'`/`'disabled'` → render-only (passive; never sent to the LLM, so the
+ * agent never calls it and no card ever renders). Do not "simplify" by deleting
+ * `available` either — an action with no handler and no `renderAndWaitForResponse`
+ * then throws "Invalid action configuration". See issue #49.
  */
 export function useGenerativeUiBindings(): void {
   const proposedActions = usePanelStore((s) => s.proposedActions);
@@ -57,7 +65,7 @@ export function useGenerativeUiBindings(): void {
     description:
       "Render the user's synthesized decisions as cards in chat. Omit `decisions` to " +
       'show the current Today list.',
-    available: 'frontend',
+    available: 'enabled',
     parameters: [{ name: 'decisions', type: 'object[]', required: false }],
     render: ({ status, args }) => {
       if (status === 'inProgress') return <Skeleton card lines={2} />;
@@ -87,7 +95,7 @@ export function useGenerativeUiBindings(): void {
     name: 'show_daily_brief_section',
     description:
       'Render one section of the daily brief in chat. Use after summarizing email findings.',
-    available: 'frontend',
+    available: 'enabled',
     parameters: [
       {
         name: 'section',
@@ -112,7 +120,7 @@ export function useGenerativeUiBindings(): void {
   useCopilotAction({
     name: 'show_priority_email',
     description: 'Render a single high-priority email finding.',
-    available: 'frontend',
+    available: 'enabled',
     parameters: [{ name: 'finding', type: 'object', required: true }],
     render: ({ status, args }) => {
       if (status === 'inProgress') return <Skeleton card />;
@@ -140,7 +148,7 @@ export function useGenerativeUiBindings(): void {
   useCopilotAction({
     name: 'show_clutter_sender_group',
     description: 'Render a grouped-clutter-sender card.',
-    available: 'frontend',
+    available: 'enabled',
     parameters: [{ name: 'group', type: 'object', required: true }],
     render: ({ status, args }) => {
       if (status === 'inProgress') return <Skeleton card lines={3} />;
@@ -347,7 +355,7 @@ export function useGenerativeUiBindings(): void {
   useCopilotAction({
     name: 'show_action_ledger',
     description: 'Render the audit-trail ledger of recent actions.',
-    available: 'frontend',
+    available: 'enabled',
     parameters: [
       {
         name: 'limit',
@@ -371,7 +379,7 @@ export function useGenerativeUiBindings(): void {
   useCopilotAction({
     name: 'show_agent_trace',
     description: 'Render the most recent agent trace events, grouped by agent.',
-    available: 'frontend',
+    available: 'enabled',
     parameters: [
       { name: 'limit', type: 'number', required: false },
     ],
