@@ -1126,8 +1126,53 @@ code {
 .decision-foot {
   margin-top: 8px;
   font-size: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 .decision-senders { color: var(--text-faint); }
+
+/* Relative age — recency is a quiet cue, never a relevance signal. Faint,
+   pushed to the trailing edge so it never competes with the sender. */
+.decision-age {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+/* Overdue due-pill — a deadline in the past is MORE urgent, so it shifts to a
+   danger tone rather than the calm neutral "due" pill. */
+.pill.due.overdue {
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Demoted decisions — "likely past — handled?". Never hidden, only muted and
+   sunk one tap away: lower opacity + desaturated tint bar. */
+.card.decision.demoted {
+  opacity: 0.62;
+  border-left-color: var(--text-faint);
+  box-shadow: none;
+}
+.card.decision.demoted:hover {
+  opacity: 0.85;
+  border-left-color: var(--text-faint);
+  box-shadow: var(--shadow-card);
+}
+.card.decision.demoted .theme-chip {
+  background: var(--surface-2);
+  color: var(--text-faint);
+}
+.demoted-reason {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--text-faint);
+  line-height: 1.45;
+}
 .decision .actions { margin-top: 10px; align-items: center; }
 .decision .actions .primary {
   background: var(--tint, var(--accent));
