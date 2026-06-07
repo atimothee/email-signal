@@ -4,6 +4,7 @@ import { usePanelStore } from '../state/store';
 import { send } from '../state/bridge';
 import { ApprovalActionCard } from '../cards/ApprovalActionCard';
 import { DecisionCard } from '../cards/DecisionCard';
+import { PaymentRemindersCard } from '../cards/PaymentRemindersCard';
 import { EmailPriorityCard } from '../cards/EmailPriorityCard';
 import { ClutterSenderGroupCard } from '../cards/ClutterSenderGroupCard';
 import { MemorySuggestionCard } from '../cards/MemorySuggestionCard';
@@ -37,6 +38,23 @@ import { nanoid } from 'nanoid';
  * `available` either — an action with no handler and no `renderAndWaitForResponse`
  * then throws "Invalid action configuration". See issue #49.
  */
+/** Mirrors the useCopilotAction names registered below — dev log only (#73). */
+const GEN_UI_TOOL_NAMES = [
+  'show_decisions',
+  'show_payment_reminders',
+  'show_daily_brief_section',
+  'show_priority_email',
+  'show_clutter_sender_group',
+  'propose_memory',
+  'request_action_approval',
+  'request_batch_approval',
+  'show_action_ledger',
+  'show_agent_trace',
+] as const;
+
+/** Module-level guard so the dev tool-list log fires once, not per re-render. */
+let loggedToolsOnce = false;
+
 export function useGenerativeUiBindings(): void {
   const proposedActions = usePanelStore((s) => s.proposedActions);
   const ledger = usePanelStore((s) => s.ledger);
@@ -44,6 +62,31 @@ export function useGenerativeUiBindings(): void {
   const decisions = usePanelStore((s) => s.decisions);
   const removeProposedAction = usePanelStore((s) => s.removeProposedAction);
   const dismissMemorySuggestion = usePanelStore((s) => s.dismissMemorySuggestion);
+
+  // Shared "open the best target for a decision" behavior (link → thread → row
+  // highlight), used by both the decisions list and the payments panel.
+  const openDecision = (decision: Decision) => {
+    if (decision.actionUrl) {
+      window.open(decision.actionUrl, '_blank', 'noopener,noreferrer');
+    } else if (decision.threadLocator || decision.rowSelector) {
+      send({
+        kind: 'panel/open_thread',
+        locator: decision.threadLocator ?? null,
+        fallbackSelector: decision.rowSelector ?? null,
+      });
+    }
+  };
+
+  // Dev triage for #73: log once which gen-UI tools this bundle advertises, with
+  // the build stamp. Answers "does the running bundle even know about
+  // show_payment_reminders?" without grepping dist/assets/*.js. Keep this list
+  // in sync with the useCopilotAction registrations below.
+  React.useEffect(() => {
+    if (loggedToolsOnce) return;
+    loggedToolsOnce = true;
+    const build = typeof __BUILD_TIMESTAMP__ === 'string' ? __BUILD_TIMESTAMP__ : 'unknown';
+    console.info(`[email-signal] gen-UI tools (build ${build}):`, GEN_UI_TOOL_NAMES.join(', '));
+  }, []);
 
   // Expose key store slices to the agent as readable context.
   useCopilotReadable({
@@ -77,18 +120,8 @@ export function useGenerativeUiBindings(): void {
             <DecisionCard
               key={d.id}
               decision={d}
-              onPrimary={(decision) => {
-                // Same open-link-else-thread behavior as the Today tab (#31).
-                if (decision.actionUrl) {
-                  window.open(decision.actionUrl, '_blank', 'noopener,noreferrer');
-                } else if (decision.threadLocator || decision.rowSelector) {
-                  send({
-                    kind: 'panel/open_thread',
-                    locator: decision.threadLocator ?? null,
-                    fallbackSelector: decision.rowSelector ?? null,
-                  });
-                }
-              }}
+              // Same open-link-else-thread behavior as the Today tab (#31).
+              onPrimary={openDecision}
               onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
               // Wire the same dispositions the Today tab uses so Snooze /
               // Mark handled / "Not for me" actually do something in chat too
@@ -121,6 +154,61 @@ export function useGenerativeUiBindings(): void {
               }
             />
           ))}
+        </div>
+      );
+    },
+  });
+
+  // ── PaymentRemindersCard ────────────────────────────────────────────
+  useCopilotAction({
+    name: 'show_payment_reminders',
+    description:
+      "Render the user's bills/payments as a dedicated reminders panel (amount, payee, " +
+      'deadline, total outstanding, most-overdue first) — prefer this over show_decisions ' +
+      'whenever the user asks about money, bills, invoices, or payments. Takes no arguments: ' +
+      "it always renders the user's actual money-themed decisions from Today, never a " +
+      'model-curated subset (see issue #73).',
+    available: 'enabled',
+    // No parameter: an untyped `object[]` passthrough let the model hallucinate
+    // a shape or smuggle non-money items past the filter. This card is, by
+    // definition, the bills surface — it reads the real Today list and keeps
+    // only money decisions, always (#73).
+    parameters: [],
+    render: ({ status }) => {
+      if (status === 'inProgress') return <Skeleton card lines={3} />;
+      const list = (decisions ?? []).filter((d) => d.theme === 'money');
+      if (list.length === 0) return <ErrorState message="No payment reminders right now." />;
+      return (
+        <div className="gen-ui-slot">
+          <PaymentRemindersCard
+            decisions={list}
+            onPay={openDecision}
+            onMarkPaid={(d) =>
+              send({
+                kind: 'panel/decision_action',
+                action: 'handled',
+                decisionId: d.id,
+                emailIds: d.emailIds,
+              })
+            }
+            onSnooze={(d) =>
+              send({
+                kind: 'panel/decision_action',
+                action: 'snooze',
+                decisionId: d.id,
+                emailIds: d.emailIds,
+                untilMs: Date.now() + 24 * 60 * 60 * 1000,
+              })
+            }
+            onCorrect={(decisionId, text) =>
+              send({
+                kind: 'panel/correct_finding',
+                findingId: decisionId,
+                surface: 'priority',
+                correction: text,
+              })
+            }
+          />
         </div>
       );
     },

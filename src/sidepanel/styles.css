@@ -1029,6 +1029,19 @@ code {
 }
 
 /* Generative-UI card slot (chat-rendered) */
+/* Faint "which build am I running" footer — staleness made visible (issue #73). */
+.build-stamp {
+  padding: 4px 16px 8px;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+  opacity: 0.5;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.build-stamp:hover { opacity: 0.9; }
+
 .gen-ui-slot {
   margin: 6px 0;
 }
@@ -1235,6 +1248,96 @@ code {
   cursor: default;
   box-shadow: none;
 }
+
+/* ── Payment reminders panel (generative-UI: show_payment_reminders) ──
+   A bills-first surface: amount + deadline lead, total summed at the top,
+   most-overdue rows tinted danger. Uses the money theme's success green as the
+   calm accent, escalating to danger only when something is actually overdue. */
+.pay-panel {
+  border-left: 3px solid var(--success);
+  padding: 12px 14px 10px;
+}
+.pay-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.pay-panel-title { display: flex; align-items: center; gap: 8px; }
+.theme-chip.pay-chip { background: var(--success-soft); color: var(--success); }
+.pay-count { font-size: 12px; color: var(--text-dim); }
+.pay-overdue-tag { color: var(--danger); font-weight: 600; }
+.pay-total { text-align: right; line-height: 1.1; }
+.pay-total-label {
+  display: block;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.pay-total-amount { font-size: 15px; font-weight: 700; color: var(--text); }
+
+.pay-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.pay-row {
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border-left: 2px solid transparent;
+  animation: spring-in 280ms var(--ease-spring);
+}
+.pay-row.is-overdue { border-left-color: var(--danger); background: var(--danger-soft); }
+.pay-row.is-quiet { opacity: 0.6; }
+.pay-row.leaving { animation: slide-out 280ms var(--ease-out) forwards; overflow: hidden; }
+
+.pay-row-main { display: flex; align-items: baseline; gap: 10px; }
+.pay-row-amount {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 64px;
+}
+.pay-row-body { flex: 1; min-width: 0; }
+.pay-row-payee { font-size: 11px; color: var(--text-faint); }
+.pay-row-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.pay-due {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3, var(--bg));
+  color: var(--text-dim);
+}
+.pay-due.overdue { background: var(--danger-soft); color: var(--danger); }
+.pay-due.today { background: var(--warn-soft); color: var(--warn); }
+.pay-due.soon { background: var(--warn-soft); color: var(--warn); }
+.pay-due.none { opacity: 0.7; }
+
+.pay-row-quiet {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-faint);
+}
+
+.pay-row-actions { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+.pay-btn {
+  background: var(--success);
+  color: #06121f;
+  box-shadow: 0 4px 16px -8px var(--success);
+}
+.pay-row.is-overdue .pay-btn { background: var(--danger); box-shadow: 0 4px 16px -8px var(--danger); }
+.pay-btn:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
 
 /* Theme sub-label inside a clustered run */
 .theme-subhead {

@@ -6,6 +6,11 @@ import path from 'node:path';
 // (e.g. `npm run build:sidepanel && npx serve dist-sidepanel`). The packaged Chrome
 // extension still bundles the side panel via vite.config.ts + CRXJS.
 export default defineConfig({
+  // Keep `__BUILD_TIMESTAMP__` defined for the standalone preview build too, so
+  // the shared App.tsx reference resolves in both bundles (issue #73).
+  define: {
+    __BUILD_TIMESTAMP__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [react()],
   resolve: {
     alias: {

@@ -117,10 +117,7 @@ npm install
 cp .env.example .env
 $EDITOR .env            # set OPENAI_API_KEY (or paste the key in the extension Settings instead)
 
-# 3. Start the sidecar (Hono, http://localhost:3030)
-npm run server          # tsx watch; or `npm run server:once` for a one-shot run
-
-# 4. Build the extension bundle
+# 3. Build the extension bundle once (sidecar + watcher come next)
 npm run build:all
 ```
 
@@ -131,6 +128,25 @@ npm run build:all
 3. Click **Load unpacked** and select the `dist/` directory.
 4. Pin the EmailSignal icon, open Gmail or Outlook, and click the icon to open the side panel.
 5. In **Settings**, confirm the sidecar URL (`http://localhost:3030`) and — if you didn't put it in `server/.env` — paste your **OpenAI API key**. The extension forwards the key to your local sidecar in the request body; it is never sent anywhere except OpenAI.
+
+### Developing — keep `dist/` fresh
+
+`build:all` is a **one-shot** build. Edit anything under `src/` afterward and `dist/`
+goes stale, so the loaded extension silently runs old code — e.g. the chat tab
+falls back to plain text because the bundle predates a generative-UI tool like
+`show_payment_reminders`. This is a build-hygiene trap, not a model or wiring bug
+(see #73). For an iterative loop, run **one** command that starts the sidecar **and**
+a vite watcher that rebuilds `dist/` on every save:
+
+```bash
+npm run dev:all     # = npm run server  +  npm run dev (vite build --watch)
+```
+
+After each save, **reload the extension** in `chrome://extensions` (click the ↻ on
+the EmailSignal card) so Chrome picks up the rebuilt `dist/`. The side-panel footer
+shows the build time and the service worker logs it on startup — if either looks
+old after an edit, your watcher isn't running. For pure side-panel UI work you don't
+need the extension at all: `npm run build:sidepanel`, then serve `dist-sidepanel/`.
 
 The extension only has host permissions for `https://mail.google.com/*`, `https://outlook.live.com/*`, `https://outlook.office.com/*`, and `https://outlook.office365.com/*`. It cannot read or write any other tab.
 
