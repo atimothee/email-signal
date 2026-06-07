@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Email Signal",
   "version": "0.1.0",
-  "description": "Multi-agent Gmail assistant with explicit human-in-the-loop approvals. Reads visible Gmail DOM. Never deletes or sends mail.",
+  "description": "Distills your visible Gmail into a short list of decisions — what actually needs you today. Never deletes or sends mail.",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "Email Signal",
