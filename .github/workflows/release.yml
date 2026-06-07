@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish extension zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (at tag)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Extension build only — `npm run build:all` would also build the side-panel
+      # standalone web bundle, which is not part of the shipped Chrome zip.
+      - name: Build extension
+        run: npm run build
+
+      # The zip's filename version MUST match the version inside dist/manifest.json
+      # (the BUILT artifact — @crxjs/vite-plugin rewrites it from public/manifest.json).
+      # A mismatch here means the wrong build went out under the tag, so fail loud.
+      - name: Resolve version + assert tag agreement
+        id: ver
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST_VERSION="$(node -e "process.stdout.write(require('./dist/manifest.json').version)")"
+          echo "tag_version=$TAG_VERSION"
+          echo "manifest_version=$MANIFEST_VERSION"
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::tag ($TAG_VERSION) and dist/manifest.json version ($MANIFEST_VERSION) disagree — refusing to publish."
+            exit 1
+          fi
+          echo "version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
+          # Pre-release tags carry a hyphenated suffix (e.g. v0.1.0-rc.1).
+          if [[ "$TAG_VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Zip the CONTENTS of dist/ — Chrome's "Load unpacked" wants the manifest at
+      # the root of the unpacked folder, not nested under a `dist/` directory.
+      # `-x "*.DS_Store"` keeps macOS resource forks out (would never appear on a
+      # Linux runner today, but it's the right habit).
+      - name: Package extension zip
+        id: zip
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          ASSET="email-signal-extension-${VERSION}.zip"
+          (cd dist && zip -r -X "../$ASSET" . -x "*.DS_Store")
+          ls -la "$ASSET"
+          unzip -l "$ASSET" | head -20
+          echo "asset_path=$ASSET" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          # `make_latest: true` only takes effect for non-prereleases; safe to leave on.
+          make_latest: ${{ steps.ver.outputs.prerelease == 'false' && 'true' || 'false' }}
+          fail_on_unmatched_files: true
+          files: ${{ steps.zip.outputs.asset_path }}

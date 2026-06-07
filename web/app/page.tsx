@@ -8,6 +8,7 @@ import { FAQ } from "@/components/FAQ";
 import { ClosingCTA } from "@/components/ClosingCTA";
 import { Footer } from "@/components/Footer";
 import { MobileNotice } from "@/components/MobileNotice";
+import { SITE } from "@/lib/tokens";
 
 export default function HomePage() {
   return (
@@ -39,7 +40,8 @@ export default function HomePage() {
             description:
               "A Chrome extension that reads only the Gmail you can see and turns the noise into a short list of decisions. Never sends or deletes. Open source.",
             offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-            url: "https://emailsignal.app",
+            url: SITE.url,
+            installUrl: `${SITE.url}/install`,
           }),
         }}
       />

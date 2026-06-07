@@ -4,6 +4,15 @@
  * that motion components and inline SVGs can read the same numbers.
  */
 
+/**
+ * Version of the most recent extension release published on GitHub. Hand-edited
+ * at release time — this is the single source of truth for the "Download
+ * EmailSignal vX.Y.Z" string and for the deep-link to the release asset on the
+ * `/install` page. Keep it in sync with `public/manifest.json` `version`.
+ * (See issue #77 for the follow-up to automate this across Vercel/GitHub.)
+ */
+export const LATEST_VERSION = "0.1.0";
+
 export const SITE = {
   name: "EmailSignal",
   tagline: "The few things that need you today. Nothing else.",
@@ -12,7 +21,27 @@ export const SITE = {
   url: "https://emailsignal.app",
   twitter: "@emailsignal",
   githubUrl: "https://github.com/atimothee/email-signal",
-  /** Placeholder until the Chrome Web Store listing exists. */
+  /**
+   * In-app install guide route. Today this is where the primary CTA actually
+   * sends users — the unpacked-zip bridge install. Once the Chrome Web Store
+   * listing is live, the CTA can flip to `chromeStoreUrl` below.
+   */
+  installUrl: "/install",
+  /**
+   * Direct download for the latest release asset. GitHub serves a stable
+   * redirect at `/releases/latest/download/<asset>`, but the asset filename
+   * embeds the version, so we still need `LATEST_VERSION` to build the URL.
+   */
+  releaseAssetUrl: `https://github.com/atimothee/email-signal/releases/download/v${LATEST_VERSION}/email-signal-extension-${LATEST_VERSION}.zip`,
+  /**
+   * GitHub releases index — fallback / "specific build" link when the
+   * versioned asset URL ever 404s (e.g. mid-release window).
+   */
+  releasesUrl: "https://github.com/atimothee/email-signal/releases",
+  /**
+   * Reserved for the *future* Chrome Web Store listing. The CTA prefers
+   * `installUrl` until this becomes a real https:// URL — see issue #77.
+   */
   chromeStoreUrl: "#waitlist",
 } as const;
 

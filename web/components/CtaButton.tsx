@@ -8,7 +8,10 @@ import { cn } from "@/lib/cn";
 type Variant = "primary" | "ghost";
 
 export function CtaButton({
-  href = SITE.chromeStoreUrl,
+  // Default to the in-app install guide — that's the real install path until
+  // the Chrome Web Store listing goes live. `SITE.chromeStoreUrl` is reserved
+  // for the future store URL (see `web/lib/tokens.ts`).
+  href = SITE.installUrl,
   variant = "primary",
   children,
   className,

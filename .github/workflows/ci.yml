@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: typecheck + build extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` already wraps `tsc --noEmit` + `npm run typecheck:server`
+      # before the vite build, so a single invocation guards typecheck for both
+      # the extension and the sidecar AND produces a clean `dist/`. Splitting it
+      # apart would only let one of the three pieces drift unnoticed.
+      - name: Build extension (typecheck + vite)
+        run: npm run build
+
+      - name: Sanity-check built manifest
+        run: |
+          test -f dist/manifest.json
+          node -e "const m=require('./dist/manifest.json'); if(!m.version) throw new Error('built manifest missing version'); console.log('built manifest version', m.version);"

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Container } from "./Container";
 import { Reveal } from "./Reveal";
 import { SectionHeading } from "./SectionHeading";
@@ -10,7 +11,7 @@ const STEPS = [
   {
     n: "1",
     title: "Add EmailSignal to Chrome",
-    body: "One click from the Chrome Web Store. It only has permission for your Gmail tab — nothing else.",
+    body: "Download the latest build, unzip, and load it in Chrome (Developer mode). Two minutes, no terminal.",
   },
   {
     n: "2",
@@ -58,22 +59,17 @@ export function GetStarted() {
         </div>
 
         <Reveal delay={0.1}>
-          <div className="mx-auto mt-10 max-w-2xl rounded-card border border-warn/20 bg-warn/[0.06] p-4 text-center text-[12.5px] text-text-dim">
-            <p>
-              <span className="font-medium text-warn">Heads up — pre-launch.</span>{" "}
-              The Chrome Web Store listing and the one-click helper app are on
-              the way. Today the helper still needs a quick command on your
-              machine.{" "}
-              <a
-                href={SITE.githubUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-accent-strong underline-offset-2 hover:underline"
-              >
-                For developers, the README has the full path →
-              </a>
-            </p>
-          </div>
+          <p className="mx-auto mt-8 max-w-2xl text-center text-[12.5px] text-text-faint">
+            Until our Chrome Web Store listing goes live, install takes about
+            2 minutes —{" "}
+            <Link
+              href={SITE.installUrl}
+              className="text-accent-strong underline-offset-2 hover:underline"
+            >
+              see the install guide
+            </Link>
+            .
+          </p>
         </Reveal>
 
         <Reveal delay={0.15}>
