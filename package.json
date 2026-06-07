@@ -2,7 +2,7 @@
   "name": "email-signal",
   "version": "0.1.0",
   "private": true,
-  "description": "EmailSignal — multi-agent Gmail assistant Chrome extension with explicit human-in-the-loop approvals.",
+  "description": "Email Signal — a Chrome extension (with a local Node sidecar) that distills your visible Gmail into a short list of decisions: what actually needs you today. Multi-agent, date-aware, human-in-the-loop; never deletes or sends mail.",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --config vite.config.ts",
