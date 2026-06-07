@@ -13,11 +13,10 @@
     "server": "tsx watch server/index.ts",
     "server:once": "tsx server/index.ts",
     "evals": "tsx evals/run.ts",
-    "eval:clutter": "tsx evals/clutter.eval.ts",
-    "eval:priority": "tsx evals/priority.eval.ts",
     "eval:safety": "tsx evals/safety.eval.ts",
     "eval:memory": "tsx evals/memory.eval.ts",
-    "eval:handoffs": "tsx evals/handoffs.eval.ts"
+    "eval:handoffs": "tsx evals/handoffs.eval.ts",
+    "eval:sender": "tsx evals/synthesis.eval.ts"
   },
   "dependencies": {
     "@copilotkit/react-core": "^1.10.0",
