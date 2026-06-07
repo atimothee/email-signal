@@ -44,6 +44,8 @@ interface PanelState {
   ingest: (msg: ExtMessage) => void;
   dismissMemorySuggestion: (id: string) => void;
   removeProposedAction: (id: string) => void;
+  /** Optimistically drop all clutter groups for a sender domain (Mute). */
+  removeGroupsByDomain: (senderDomain: string) => void;
   /** Optimistically drop a decision (handled/snoozed); restore on undo. */
   removeDecision: (id: string) => void;
   restoreDecision: (decision: Decision) => void;
@@ -143,6 +145,8 @@ export const usePanelStore = create<PanelState>((set) => ({
       delete next[id];
       return { proposedActions: next };
     }),
+  removeGroupsByDomain: (senderDomain) =>
+    set((s) => ({ groups: s.groups.filter((g) => g.senderDomain !== senderDomain) })),
   removeDecision: (id) =>
     set((s) => ({ decisions: s.decisions.filter((d) => d.id !== id) })),
   restoreDecision: (decision) =>
