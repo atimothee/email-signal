@@ -30,16 +30,16 @@ flowchart TB
 
   subgraph EXT["Chrome Extension · service worker"]
     direction LR
-    ORCH["<b>Orchestrator</b>"]
-    SUPPORT["Memory · Policy<br/>Unsubscribe · Audit"]
+    ORCH["<b>OrchestratorAgent</b>"]
+    SUPPORT["MemoryAgent · ActionPolicyAgent<br/>UnsubscribeAgent · AuditLedgerAgent"]
     PANEL["Side Panel UI"]
   end
 
   subgraph SIDE["Node Sidecar"]
     direction LR
-    CLUT["Clutter<br/>Classifier"]
-    SYN["Decision<br/>Synthesizer"]
-    EXTRA["Day Summary ·<br/>Demotion Verifier"]
+    CLUT["ClutterClassifier<br/>Agent"]
+    SYN["DecisionSynthesizer<br/>Agent"]
+    EXTRA["DaySummaryAgent ·<br/>DemotionVerifierAgent"]
   end
 
   subgraph TOOLS["Platforms & Tools"]
