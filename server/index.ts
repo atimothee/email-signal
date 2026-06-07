@@ -20,7 +20,7 @@ import {
   EmailCandidateSchema,
   UserPreferenceSchema,
 } from '../src/schemas/index.js';
-import { runAgentClassification, runAgentChat, initServerWeave, weaveDashboardUrl } from './agents.js';
+import { runAgentClassification, runAgentChat, initServerWeave, weaveDashboardUrl, recordFeedback } from './agents.js';
 import { cacheStatus, initCache } from './cache.js';
 import { initVectorIndex, vectorIndexStatus } from './vector-index.js';
 import type { SseWriter } from './trace-bridge.js';
@@ -127,7 +127,7 @@ app.post('/orchestrate/classify', async (c) => {
     try {
       const result = await runAgentClassification({ turnId, candidates, writer, settings: effective, account, preferences, timezone });
       await writer.send('classification', { clutter: result.clutter });
-      await writer.send('decisions', { decisions: result.decisions, summary: result.summary });
+      await writer.send('decisions', { decisions: result.decisions, summary: result.summary, weaveCallId: result.weaveCallId });
       await writer.send('done', { ok: true });
     } catch (err) {
       const message = (err as Error).message ?? 'unknown error';
@@ -135,6 +135,36 @@ app.post('/orchestrate/classify', async (c) => {
       await writer.send('done', { ok: false });
     }
   });
+});
+
+// ---- Production feedback loop (issue #46) ----
+// Capture a real user signal (decision accepted / snoozed / muted, or a chat
+// thumb) and attach it as weave.feedback to the call the originating scan/chat
+// produced — closing the production → eval loop. Best-effort by contract: a bad
+// body is a 400, but a missing Weave key or a feedback API failure returns
+// { ok: false } and never disrupts the caller. `callId` comes from the scan's
+// `weaveCallId` (decisions SSE) that the extension threads back.
+const FeedbackBody = z.object({
+  callId: z.string().min(1).max(128),
+  signal: z.enum(['decision', 'chat']),
+  value: z.string().min(1).max(64),
+  decisionId: z.string().max(256).optional(),
+});
+
+app.post('/feedback', async (c) => {
+  const json = await c.req.json().catch(() => null);
+  const parsed = FeedbackBody.safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
+  }
+  const { callId, signal, value, decisionId } = parsed.data;
+  const ok = await recordFeedback(
+    callId,
+    signal,
+    value,
+    decisionId ? { decisionId } : undefined
+  ).catch(() => false);
+  return c.json({ ok });
 });
 
 const ChatBody = z.object({

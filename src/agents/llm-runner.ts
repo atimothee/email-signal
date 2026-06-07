@@ -47,6 +47,12 @@ export interface ClassifyResult {
   decisions: Decision[];
   /** One-sentence "here's your day" synthesis from the sidecar, '' if nothing. */
   summary: string;
+  /**
+   * Weave call id of the scan that produced these decisions, when sidecar tracing
+   * is on. Threaded back with decision feedback so accept/snooze/mute attaches to
+   * the originating trace (issue #46). Undefined when Weave is off.
+   */
+  weaveCallId?: string;
 }
 
 async function preflight(): Promise<string | undefined> {
@@ -81,6 +87,7 @@ export async function classifyViaSidecar(
   const clutter: ClutterFinding[] = [];
   const decisions: Decision[] = [];
   let summary = '';
+  let weaveCallId: string | undefined;
 
   // The user's local IANA timezone (e.g. "America/New_York"), so the server's
   // temporal frame resolves "today"/"tomorrow"/"the 15th" against the user's day,
@@ -115,6 +122,7 @@ export async function classifyViaSidecar(
         if (r.success) decisions.push(r.data);
       }
       if (typeof ev.data.summary === 'string') summary = ev.data.summary;
+      if (typeof ev.data.weaveCallId === 'string') weaveCallId = ev.data.weaveCallId;
     } else if (ev.type === 'error') {
       await recordTrace({
         kind: 'error',
@@ -126,7 +134,7 @@ export async function classifyViaSidecar(
     }
   }
 
-  return { clutter, decisions, summary };
+  return { clutter, decisions, summary, weaveCallId };
 }
 
 /** Ask the sidecar a chat question about the inbox. */

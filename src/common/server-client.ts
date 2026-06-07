@@ -16,7 +16,7 @@ import { STORAGE_KEYS } from './constants';
 export type ServerEvent =
   | { type: 'trace'; data: any }
   | { type: 'classification'; data: { clutter: unknown[] } }
-  | { type: 'decisions'; data: { decisions: unknown[]; summary?: string } }
+  | { type: 'decisions'; data: { decisions: unknown[]; summary?: string; weaveCallId?: string } }
   | { type: 'chat_reply'; data: { text: string } }
   | { type: 'error'; data: { message: string } }
   | { type: 'done'; data: { ok: boolean } };
@@ -41,6 +41,34 @@ export async function isServerHealthy(base?: string): Promise<{ ok: boolean; inf
     return { ok: true, info };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Send a production-feedback signal to the sidecar (issue #46): a decision the
+ * user accepted / snoozed / muted, attached server-side to the Weave call the
+ * originating scan produced (`callId` = the scan's `weaveCallId`).
+ *
+ * Fire-and-forget by contract — feedback must NEVER disrupt the UX, so every
+ * failure (sidecar down, Weave off, bad response) is swallowed. The server
+ * independently no-ops when it has no Weave key, so the extension can always
+ * attempt this without first checking whether tracing is configured.
+ */
+export async function postFeedback(body: {
+  callId: string;
+  signal: 'decision' | 'chat';
+  value: string;
+  decisionId?: string;
+}): Promise<void> {
+  try {
+    const base = await getServerBase();
+    await fetch(`${base}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    /* best-effort: never surface a feedback failure to the user */
   }
 }
 

@@ -30,6 +30,7 @@ import {
 } from './types';
 import { classifyViaSidecar, chatViaSidecar } from './llm-runner';
 import { log } from '@/common/log';
+import { STORAGE_KEYS } from '@/common/constants';
 
 interface OrchestratorTurnInput {
   trigger: 'scan' | 'brief' | 'chat' | 'approval' | 'execute' | 'periodic';
@@ -157,7 +158,14 @@ async function handleScan(scan: ScanResult, ctx: AgentContext): Promise<void> {
       preferences: ctx.preferences,
     })
   );
-  const { decisions, clutter, summary } = await classifyViaSidecar(ctx.turnId, scan.candidates, ctx.preferences);
+  const { decisions, clutter, summary, weaveCallId } = await classifyViaSidecar(ctx.turnId, scan.candidates, ctx.preferences);
+  // Stash the scan's Weave call id so the service worker's decision_action /
+  // save_preference handlers can attach the user's later accept/snooze/mute as
+  // feedback to this exact trace (issue #46). Best-effort: only set when tracing
+  // is on; a storage failure must never break the scan.
+  if (weaveCallId && typeof chrome !== 'undefined' && chrome.storage?.local) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.scanTrace]: weaveCallId }).catch(() => {});
+  }
   await recordTrace({
     kind: 'agent_end',
     agent: AGENT_NAMES.priority,

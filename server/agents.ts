@@ -172,6 +172,15 @@ function summarizeUsage(result: unknown): Record<string, unknown> {
 let weaveProjectId: string | null = null;
 
 /**
+ * The live WeaveClient captured at init. We keep it so the production feedback
+ * loop ({@link recordFeedback}) can call the trace-server feedback API directly —
+ * the package index re-exports `op`/`init`/`requireCurrentCallStackEntry` but NOT
+ * `getGlobalClient`, so we hold our own reference. Null until (and unless) init
+ * succeeds; every reader treats null as "tracing off" and no-ops.
+ */
+let weaveClient: import('weave').WeaveClient | null = null;
+
+/**
  * Wraps a `run()` call so its outcome shape matches Promise.allSettled,
  * keeping the result-handling code below uniform.
  */
@@ -235,6 +244,7 @@ export async function ensureServerWeave(
     // weave resolves the default entity here and sets client.projectId to the
     // canonical "<entity>/<project>" — capture it for a correct dashboard URL.
     weaveProjectId = client?.projectId ?? null;
+    weaveClient = client ?? null;
     weaveMod = weave;
     weaveReady = true;
     // eslint-disable-next-line no-console
@@ -295,6 +305,67 @@ function stageOp(
 async function traced<T>(name: string, input: unknown, fn: () => Promise<T>): Promise<T> {
   if (!weaveReady || !weaveMod) return fn();
   return stageOp(name)(input, fn as () => Promise<unknown>) as Promise<T>;
+}
+
+/**
+ * Like {@link traced}, but also returns the Weave **call id** of the op it opened
+ * — the stable handle the production feedback loop needs to attach `weave.feedback`
+ * to the trace a scan/chat produced (issue #46). We read the id from INSIDE the op
+ * (where `requireCurrentCallStackEntry()` resolves to the just-pushed call), so the
+ * id belongs to THIS op, not a parent. When Weave is off this is a transparent
+ * pass-through with `callId: null`, so callers stay no-op without branching.
+ */
+async function tracedRoot<T>(
+  name: string,
+  input: unknown,
+  fn: () => Promise<T>
+): Promise<{ result: T; callId: string | null }> {
+  if (!weaveReady || !weaveMod) return { result: await fn(), callId: null };
+  let callId: string | null = null;
+  const result = (await stageOp(name)(input, async () => {
+    try {
+      callId = weaveMod!.requireCurrentCallStackEntry().callId ?? null;
+    } catch {
+      /* no current call (shouldn't happen inside an op) — feedback just won't attach */
+    }
+    return fn();
+  })) as T;
+  return { result, callId };
+}
+
+/**
+ * Attach a piece of production feedback to the Weave call identified by `callId`
+ * (the value {@link tracedRoot} returned for a scan or chat turn). This is how a
+ * real user signal — a decision accepted / snoozed / muted, a chat thumb — gets
+ * linked back to the trace that produced it, so good vs. bad outputs become
+ * findable and curatable in the dashboard (issue #46).
+ *
+ * Fully best-effort by contract: returns `false` (never throws) when tracing is
+ * off, the client/projectId/callId is missing, or the API call fails — a feedback
+ * problem must never disrupt scanning, chat, or the UI.
+ */
+export async function recordFeedback(
+  callId: string,
+  signal: string,
+  value: string,
+  meta?: Record<string, unknown>
+): Promise<boolean> {
+  if (!weaveReady || !weaveClient || !weaveProjectId || !callId) return false;
+  try {
+    // A call's Weave ref is `weave:///<entity>/<project>/call/<callId>`, and
+    // `weaveProjectId` is already the canonical "<entity>/<project>".
+    const weaveRef = `weave:///${weaveProjectId}/call/${callId}`;
+    await weaveClient.traceServerApi.feedback.feedbackCreateFeedbackCreatePost({
+      project_id: weaveProjectId,
+      weave_ref: weaveRef,
+      feedback_type: `emailsignal.${signal}`,
+      payload: { value, ...(meta ?? {}) },
+    });
+    return true;
+  } catch (err) {
+    console.warn('[emailsignal-server] feedback record failed', err);
+    return false;
+  }
 }
 
 /**
@@ -415,6 +486,13 @@ export interface ClassifyOutput {
    * the summary call fails (we never let a summary error break the decisions flow).
    */
   summary: string;
+  /**
+   * Weave call id of the `email_signal.scan` op that produced this result, when
+   * tracing is on. The extension threads it back with decision feedback so a
+   * later accept/snooze/mute attaches to the originating trace (issue #46).
+   * Undefined when Weave is off.
+   */
+  weaveCallId?: string;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -573,6 +651,15 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   ensureKey(input.settings);
   const sessionId = nanoid();
   const { turnId, candidates, writer, account } = input;
+
+  // Wrap the whole scan in ONE root op so its stages (clutter, synthesis,
+  // consolidation, day summary, verify) nest under a single call — and capture
+  // that call's id, the stable handle the extension sends back with decision
+  // feedback (issue #46). Off-Weave this is a transparent pass-through.
+  const { result: scanResult, callId: scanCallId } = await tracedRoot(
+    'email_signal.scan',
+    { sessionId, turnId, model: cfg.model, candidates: candidates.length },
+    async (): Promise<ClassifyOutput> => {
   // Anchor "now" once for the whole scan: the model's temporal frame and all
   // server-side recency/demotion math resolve against this single timestamp.
   const now = new Date();
@@ -812,6 +899,9 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
 
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
   return result;
+    }
+  );
+  return { ...scanResult, weaveCallId: scanCallId ?? undefined };
 }
 
 // ── Context Retriever: retrieve + render + index prior decisions ──
