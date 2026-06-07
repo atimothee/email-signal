@@ -21,7 +21,6 @@ import { reconcilePreferences } from './memory.js';
 import { dedupDecisions } from './dedup.js';
 import {
   ClientSettings,
-  DEFAULT_WANDB_PROJECT,
   resolveConfig,
   requireOpenAIKey,
 } from './config.js';
@@ -37,6 +36,13 @@ let weaveReady = false;
  * reach `weave.op` without re-importing. Null until (and unless) init succeeds.
  */
 let weaveMod: typeof import('weave') | null = null;
+/**
+ * The fully-qualified "<entity>/<project>" id the weave SDK resolved at init
+ * time (it fills in the default entity from the signed-in account). Captured so
+ * `weaveDashboardUrl()` can build a link that actually opens, instead of guessing
+ * the entity. Null until init succeeds.
+ */
+let weaveProjectId: string | null = null;
 
 /**
  * Wraps a `run()` call so its outcome shape matches Promise.allSettled,
@@ -98,7 +104,10 @@ export async function ensureServerWeave(
     // environment — so an env-only key makes init() throw "Could not find entry in
     // netrc file". Log in explicitly with the key first (it writes the netrc).
     await weave.login(apiKey);
-    await weave.init(project);
+    const client = await weave.init(project);
+    // weave resolves the default entity here and sets client.projectId to the
+    // canonical "<entity>/<project>" — capture it for a correct dashboard URL.
+    weaveProjectId = client?.projectId ?? null;
     weaveMod = weave;
     weaveReady = true;
     // eslint-disable-next-line no-console
@@ -112,15 +121,23 @@ export async function ensureServerWeave(
 
 /**
  * Best-effort Weave dashboard URL for the configured project. W&B traces live at
- * `https://wandb.ai/<entity>/<project>/weave`. We don't reliably know the entity
- * here (it's resolved from the API key at init time), so when WANDB_PROJECT is in
- * `entity/project` form we use it verbatim; otherwise we omit the entity and let
- * W&B resolve the default one. Returns null when tracing isn't configured.
+ * `https://wandb.ai/<entity>/<project>/weave`.
+ *
+ * Once tracing is up we use the canonical `<entity>/<project>` the SDK resolved
+ * at init time (`weaveProjectId`), so the link is always correct. Before init —
+ * e.g. a settings-only key that hasn't traced yet — we resolve via the same
+ * settings-first `resolveConfig` the rest of the server uses (NOT raw env, which
+ * wrongly returned null for a Settings key), and fall back to a project-scoped
+ * URL when we don't yet know the entity. Returns null only when tracing is
+ * genuinely not configured.
  */
-export function weaveDashboardUrl(): string | null {
-  if (!process.env['WANDB_API_KEY']) return null;
-  const project = process.env['WANDB_PROJECT'] ?? DEFAULT_WANDB_PROJECT;
-  return `https://wandb.ai/${project}/weave`;
+export function weaveDashboardUrl(settings?: ClientSettings): string | null {
+  if (weaveProjectId) return `https://wandb.ai/${weaveProjectId}/weave`;
+  const cfg = resolveConfig(settings);
+  if (!cfg.wandbApiKey) return null;
+  // We don't know the entity until login; an "entity/project"-form project is
+  // used verbatim, otherwise W&B resolves the default entity from the account.
+  return `https://wandb.ai/${cfg.wandbProject}/weave`;
 }
 
 /**

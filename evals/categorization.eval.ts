@@ -106,7 +106,10 @@ async function logToWeave(cases: Case[], cache: Map<string, Prediction>): Promis
   if (!process.env['WANDB_API_KEY']) return;
   try {
     const weave: any = await import('weave');
-    await weave.init(process.env['WANDB_PROJECT'] ?? 'email-signal');
+    // Eval runs land in a SEPARATE project from prod traces by default
+    // (overridable via WANDB_PROJECT) so prod traces stay uncluttered (#47).
+    const evalProject = process.env['WANDB_PROJECT'] ?? 'email-signal-evals';
+    await weave.init(evalProject);
 
     const dataset = new weave.Dataset({
       id: 'email-theme-categorization',
@@ -140,7 +143,7 @@ async function logToWeave(cases: Case[], cache: Map<string, Prediction>): Promis
       scorers: [surfacedScorer, themeScorer],
     });
     await evaluation.evaluate({ model });
-    console.log('  ↳ logged Weave evaluation to W&B project', process.env['WANDB_PROJECT'] ?? 'email-signal');
+    console.log('  ↳ logged Weave evaluation to W&B project', evalProject);
   } catch (err) {
     console.warn('  ↳ weave logging skipped:', (err as Error)?.message ?? err);
   }
