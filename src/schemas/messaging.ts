@@ -118,6 +118,9 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
     kind: z.literal('bg/turn_done'),
     ok: z.boolean().default(true),
     decisions: z.number().int().min(0).optional(),
+    // Same trigger taxonomy as turn_started, so the pulse can ignore tiny
+    // action turns (approval/execute) instead of flipping to "done" on each.
+    trigger: z.enum(['scan', 'brief', 'chat', 'approval', 'execute', 'periodic']).optional(),
   }),
   z.object({
     kind: z.literal('bg/decisions'),

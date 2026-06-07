@@ -80,7 +80,12 @@ export const usePanelStore = create<PanelState>((set) => ({
           return { scan: msg.scan };
         case 'bg/turn_started':
           // A fresh scan clears stale results so the user never sees old data
-          // while we re-read. Other triggers just show a working state.
+          // while we re-read. Tiny ACTION turns (approve/execute — e.g. each
+          // mark_read fired by Mute) must NOT drive the Ambient Pulse: they used
+          // to flip it thinking↔done per action, blinking the "N decisions"
+          // header on an unrelated surface (#50). Those have their own trace +
+          // ledger surfaces. Only real scan/brief work moves the pulse.
+          if (msg.trigger === 'approval' || msg.trigger === 'execute') return {};
           return msg.trigger === 'scan'
             ? {
                 scanStatus: 'reading',
@@ -100,6 +105,8 @@ export const usePanelStore = create<PanelState>((set) => ({
             },
           };
         case 'bg/turn_done':
+          // Mirror turn_started: action turns don't touch the pulse (#50).
+          if (msg.trigger === 'approval' || msg.trigger === 'execute') return {};
           return { scanStatus: msg.ok ? 'done' : 'error' };
         case 'bg/decisions':
           return { decisions: msg.decisions, daySummary: msg.summary ?? null };

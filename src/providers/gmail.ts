@@ -350,6 +350,26 @@ function readOpenThread(warnings: string[]): EmailCandidate[] {
         const receivedAt = parseTitleDate(
           msg.querySelector(DATE_SELECTOR) ?? msg.querySelector('.g3 span[title], span.g3[title]')
         );
+        // Best-effort stable locator so Mute's mark_read has something to target
+        // for senders scanned from an OPEN THREAD (#41). Inbox rows get one via
+        // buildRowSelector; thread messages only do when they expose a stable id.
+        // When none exists we WARN and leave domAnchor unset rather than fabricate
+        // a fragile selector — the mark_read handler fails honestly (and the Mute
+        // confirmation reports the real count) instead of silently no-opping.
+        const threadRowSelector = (() => {
+          const dmid = msg.getAttribute('data-message-id');
+          if (dmid) return `[data-message-id="${CSS.escape(dmid)}"]`;
+          const lmid = msg.getAttribute('data-legacy-message-id');
+          if (lmid) return `[data-legacy-message-id="${CSS.escape(lmid)}"]`;
+          const id = msg.getAttribute('id');
+          if (id) return `#${CSS.escape(id)}`;
+          return null;
+        })();
+        if (!threadRowSelector) {
+          warnings.push(
+            `thread msg ${idx}: no stable selector — mark-read unavailable for this sender in thread view`
+          );
+        }
         return EmailCandidateSchema.parse({
           id: hash(`${from.email}|${subject}|${idx}|${bodyText.slice(0, 64)}`),
           threadId: hash(subject),
@@ -361,6 +381,7 @@ function readOpenThread(warnings: string[]): EmailCandidate[] {
           hasUnsubscribeLink: unsubLinks.length > 0,
           unsubscribeLinkHrefs: unsubLinks,
           ...(receivedAt ? { receivedAt } : {}),
+          ...(threadRowSelector ? { domAnchor: { rowSelector: threadRowSelector } } : {}),
         });
       } catch (err) {
         warnings.push(`thread msg ${idx}: ${(err as Error).message}`);

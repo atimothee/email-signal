@@ -113,7 +113,7 @@ export async function runOrchestratorTurn(input: OrchestratorTurnInput): Promise
       elapsedMs: Date.now() - started,
     });
     if (input.trigger !== 'periodic') {
-      await broadcast({ kind: 'bg/turn_done', ok });
+      await broadcast({ kind: 'bg/turn_done', ok, trigger: input.trigger });
     }
   }
 }
