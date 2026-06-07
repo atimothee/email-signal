@@ -1064,7 +1064,7 @@ function formatPreferencesForSynthesis(prefs: UserPreference[]): string {
   if (important.length)
     lines.push(`- ALWAYS surface mail from these senders/domains and rank it higher: ${important.join(', ')}.`);
   if (ignored.length)
-    lines.push(`- NEVER surface mail from these senders/domains — do not create a decision for them: ${ignored.join(', ')}.`);
+    lines.push(`- NEVER surface mail from these senders/domains — do not create a decision OR a clutter finding for them, in any category: ${ignored.join(', ')}.`);
   if (topics.length)
     lines.push(`- The user cares about these topics; weight related mail up: ${topics.join(', ')}.`);
   if (timeSensitive.length)

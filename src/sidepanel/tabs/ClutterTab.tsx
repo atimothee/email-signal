@@ -30,29 +30,50 @@ function pendingUnsubByDomain(actions: Record<string, ProposedAction>): Map<stri
   return map;
 }
 
+/** A Mute whose inbox-clearing actions are dispatched and being tracked, so the
+ *  confirmation can report the REAL count of messages cleared (from ledger
+ *  results) instead of an optimistic guess (#72, Defect 2). */
+interface MutePending {
+  name: string;
+  willUnsub: boolean;
+  /** The dispatched mark_read action ids we're waiting on ledger results for. */
+  ids: string[];
+  total: number;
+}
+
+/** A Mute that Dry run gated off, kept so the toast's nudge can re-run it live
+ *  once the user turns Dry run off (#72, Defect A). */
+interface DryRunRetry {
+  group: ClutterSenderGroup;
+  willUnsub: boolean;
+}
+
 /**
- * One honest, consolidated line describing what Mute actually did — never a
- * false "done" when the gate only simulated the inbox actions. The hide-from-app
- * part always sticks; the unsubscribe (irreversible) and mark-read only run in
- * Live mode.
+ * The honest note when Gmail is gated OFF (kill switch / dry run): the
+ * hide-from-app part always sticks, but nothing changed in Gmail. Returns null
+ * when neither gate is active (the live path reports real counts instead).
  */
-function muteConfirmation(
+function gatedMuteNote(
   name: string,
   willUnsub: boolean,
-  markReadCount: number,
   dryRun: boolean,
   killSwitch: boolean
-): string {
+): string | null {
   if (killSwitch) {
     return `Hid ${name} here. Kill switch is on, so nothing was changed in Gmail.`;
   }
   if (dryRun) {
     const what = willUnsub ? 'unsubscribe & clear it' : 'clear it';
-    return `Hid ${name} here. Turn off Dry run to ${what} in Gmail.`;
+    return `Hid ${name} here. Dry run is on — turn it off to ${what} in Gmail.`;
   }
+  return null;
+}
+
+/** Live note reflecting the REAL number of messages cleared so far. */
+function liveMuteNote(name: string, willUnsub: boolean, ok: number, total: number): string {
   const parts: string[] = [];
   if (willUnsub) parts.push('unsubscribed');
-  if (markReadCount > 0) parts.push(`${markReadCount} marked read`);
+  if (total > 0) parts.push(ok === total ? `${ok} marked read` : `${ok}/${total} marked read`);
   return parts.length
     ? `Muted ${name} — ${parts.join(', ')}.`
     : `Muted ${name} — hidden from future scans.`;
@@ -67,15 +88,40 @@ export function ClutterTab(): JSX.Element {
   const removeGroupsByDomain = usePanelStore((s) => s.removeGroupsByDomain);
   const dryRun = usePanelStore((s) => s.dryRun);
   const killSwitch = usePanelStore((s) => s.killSwitch);
+  const setDryRun = usePanelStore((s) => s.setDryRun);
+  const ledger = usePanelStore((s) => s.ledger);
 
   // One consolidated, honest confirmation per Mute (no per-email noise). Mirrors
   // the Today tab's undo snackbar. Auto-dismisses after a few seconds.
   const [muteNote, setMuteNote] = useState<string | null>(null);
+  // The in-flight live Mute we're tracking ledger results for, and a Dry-run Mute
+  // we can re-run live if the user takes the nudge.
+  const [mutePending, setMutePending] = useState<MutePending | null>(null);
+  const [dryRunRetry, setDryRunRetry] = useState<DryRunRetry | null>(null);
   useEffect(() => {
     if (!muteNote) return;
-    const t = window.setTimeout(() => setMuteNote(null), 6000);
+    const t = window.setTimeout(() => {
+      setMuteNote(null);
+      setDryRunRetry(null);
+    }, 6000);
     return () => window.clearTimeout(t);
   }, [muteNote]);
+
+  // As mark_read results land in the ledger, refresh the confirmation with the
+  // REAL count of messages cleared (#72, Defect 2). A row that errors ('row not
+  // found', etc.) comes back ok:false and simply isn't counted, so the toast can
+  // never over-promise. Finalize once every dispatched action has reported.
+  useEffect(() => {
+    if (!mutePending) return;
+    const { ids, total, name, willUnsub } = mutePending;
+    const idSet = new Set(ids);
+    const results = ledger.filter((e) => idSet.has(e.proposed.id) && e.executed);
+    const ok = results.filter(
+      (e) => e.executed!.result.ok && !e.executed!.result.after?.['dryRun']
+    ).length;
+    setMuteNote(liveMuteNote(name, willUnsub, ok, total));
+    if (results.length >= total) setMutePending(null);
+  }, [ledger, mutePending]);
 
   const scanning = scanStatus === 'reading' || scanStatus === 'thinking';
 
@@ -141,18 +187,44 @@ export function ClutterTab(): JSX.Element {
     removeProposedAction(id);
   };
 
+  // Dispatch the inbox-clearing half of a Mute (unsubscribe + mark each message
+  // read) and return the dispatched mark_read action ids so the caller can track
+  // their real ledger results. Each mark_read carries the stable messageId so the
+  // content script re-finds the row by identity in the user's real tab — not by
+  // the positional selector resolved in the disposable scan tab (#72, Defect B).
+  // Every step still routes through the policy gate (dry-run / kill switch apply).
+  const dispatchClear = (g: ClutterSenderGroup, willUnsub: boolean): string[] => {
+    if (willUnsub) approveUnsub(g);
+    const ids: string[] = [];
+    for (const anchor of g.rowAnchors) {
+      const action = normalizeProposedAction({
+        type: 'mark_read',
+        emailId: anchor.emailId,
+        params: {
+          rowSelector: anchor.rowSelector,
+          ...(anchor.messageId ? { messageId: anchor.messageId } : {}),
+        },
+        proposedBy: 'orchestrator',
+        rationale: `Muted ${g.senderDisplay}`,
+      });
+      ids.push(action.id);
+      send({ kind: 'panel/execute_action', action });
+    }
+    return ids;
+  };
+
   // Mute is the "make this sender go away properly" action: hide it from future
   // scans, unsubscribe at the source when we have a link, and clear the noise
-  // it already left. Every inbox-touching step (unsubscribe, mark_read) routes
-  // through the policy gate, so dry-run and the kill switch still apply — Mute
-  // never bypasses the safety model, it just bundles the approvals.
+  // it already left. The hide-from-app part always sticks; the Gmail mutations
+  // (unsubscribe, mark_read) route through the policy gate, so dry-run and the
+  // kill switch still apply — Mute never bypasses the safety model.
   const muteSender = (g: ClutterSenderGroup) => {
     const willUnsub = pending.has(g.senderDomain);
-    const markReadCount = g.rowAnchors.length;
 
     // 1) Hide future: persist an ignored_sender preference the scan recalls.
-    //    This part is local to the app and ALWAYS takes effect — it is not a
-    //    Gmail mutation, so dry-run / kill-switch don't suppress it.
+    //    Local to the app and ALWAYS takes effect — not a Gmail mutation, so
+    //    dry-run / kill-switch don't suppress it. A re-scan now also drops the
+    //    sender deterministically (#72, Defect C), so it won't reappear here.
     send({
       kind: 'panel/save_preference',
       preference: {
@@ -166,32 +238,40 @@ export function ClutterTab(): JSX.Element {
       },
     });
 
-    // 2) Unsubscribe at the source when a (gated) proposal exists for this
-    //    sender. No-ops for senders without a List-Unsubscribe link.
-    if (willUnsub) approveUnsub(g);
+    // The muted sender leaves the list immediately either way.
+    removeGroupsByDomain(g.senderDomain);
 
-    // 3) Clear the existing pile: mark each of this sender's messages read.
-    //    rowAnchors carry the Gmail selectors resolved at scan time. Each routes
-    //    through the gate; with the centralized fix in store.ts these execute
-    //    turns no longer drive the Ambient Pulse, so they don't blink the
-    //    "N decisions" header (#50).
-    for (const anchor of g.rowAnchors) {
-      const action = normalizeProposedAction({
-        type: 'mark_read',
-        emailId: anchor.emailId,
-        params: { rowSelector: anchor.rowSelector },
-        proposedBy: 'orchestrator',
-        rationale: `Muted ${g.senderDisplay}`,
-      });
-      send({ kind: 'panel/execute_action', action });
+    // 2) When Gmail is gated off, say so honestly and DON'T dispatch — keep the
+    //    sender's unsubscribe/rows intact so the Dry-run nudge can clear it live.
+    const gated = gatedMuteNote(g.senderDisplay, willUnsub, dryRun, killSwitch);
+    if (gated) {
+      setMutePending(null);
+      setDryRunRetry(dryRun && !killSwitch ? { group: g, willUnsub } : null);
+      setMuteNote(gated);
+      return;
     }
 
-    // 4) Optimistic feedback: the muted sender leaves the list immediately,
-    //    paired with ONE honest confirmation of what actually happened — never
-    //    a false "done" when dry-run/kill-switch only simulated the inbox work
-    //    (#41 / #50).
-    removeGroupsByDomain(g.senderDomain);
-    setMuteNote(muteConfirmation(g.senderDisplay, willUnsub, markReadCount, dryRun, killSwitch));
+    // 3) Live: clear the pile and track real ledger results for the toast count.
+    const ids = dispatchClear(g, willUnsub);
+    setDryRunRetry(null);
+    setMutePending({ name: g.senderDisplay, willUnsub, ids, total: ids.length });
+    setMuteNote(liveMuteNote(g.senderDisplay, willUnsub, 0, ids.length));
+  };
+
+  // Dry-run nudge: turn Dry run off, then clear the sender we just muted for real
+  // (#72, Defect A). The short delay lets the set_dry_run storage write land
+  // before the execute turn reads it.
+  const turnOffDryRunAndClear = () => {
+    if (!dryRunRetry) return;
+    const { group, willUnsub } = dryRunRetry;
+    setDryRun(false);
+    send({ kind: 'panel/set_dry_run', enabled: false });
+    setDryRunRetry(null);
+    window.setTimeout(() => {
+      const ids = dispatchClear(group, willUnsub);
+      setMutePending({ name: group.senderDisplay, willUnsub, ids, total: ids.length });
+      setMuteNote(liveMuteNote(group.senderDisplay, willUnsub, 0, ids.length));
+    }, 250);
   };
 
   return (
@@ -218,6 +298,11 @@ export function ClutterTab(): JSX.Element {
       {muteNote && (
         <div className="undo-bar" role="status">
           <span>{muteNote}</span>
+          {dryRunRetry && (
+            <button type="button" onClick={turnOffDryRunAndClear}>
+              Turn off Dry run &amp; clear now
+            </button>
+          )}
         </div>
       )}
     </>

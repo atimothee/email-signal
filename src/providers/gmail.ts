@@ -132,6 +132,10 @@ function extractRow(row: HTMLElement, idx: number, warnings: string[]): EmailCan
       hash(`${from.email}|${subject}|${snippet}`);
     const realThreadId = row.getAttribute('data-legacy-thread-id');
     const threadAttr = realThreadId ?? idAttr;
+    // Gmail's stable per-message id. When present we carry it on the domAnchor so
+    // mark_read can re-find this row by identity in the user's real tab, instead
+    // of trusting the positional rowSelector captured in the disposable scan tab.
+    const messageId = row.getAttribute('data-legacy-message-id') ?? undefined;
     const unsubLinks = findUnsubscribeLinks(row);
     // Pagination-proof locator: Gmail navigates to a conversation when the URL
     // hash is "#all/<threadId>", regardless of which inbox page is showing. Only
@@ -151,7 +155,7 @@ function extractRow(row: HTMLElement, idx: number, warnings: string[]): EmailCan
       unsubscribeLinkHrefs: unsubLinks,
       // Inbox rows expose no body, so actionUrl stays null here (set in threads).
       ...(threadLocator ? { threadLocator } : {}),
-      domAnchor: { rowSelector: buildRowSelector(row, idx) },
+      domAnchor: { rowSelector: buildRowSelector(row, idx), ...(messageId ? { messageId } : {}) },
       // Leave unset (not null) when unparseable so the schema's optional default
       // applies; missing receivedAt is treated as RECENT downstream.
       ...(receivedAt ? { receivedAt } : {}),
@@ -400,11 +404,11 @@ function readOpenThread(warnings: string[]): EmailCandidate[] {
         // When none exists we WARN and leave domAnchor unset rather than fabricate
         // a fragile selector — the mark_read handler fails honestly (and the Mute
         // confirmation reports the real count) instead of silently no-opping.
+        const threadMessageId = msg.getAttribute('data-legacy-message-id') ?? undefined;
         const threadRowSelector = (() => {
           const dmid = msg.getAttribute('data-message-id');
           if (dmid) return `[data-message-id="${CSS.escape(dmid)}"]`;
-          const lmid = msg.getAttribute('data-legacy-message-id');
-          if (lmid) return `[data-legacy-message-id="${CSS.escape(lmid)}"]`;
+          if (threadMessageId) return `[data-legacy-message-id="${CSS.escape(threadMessageId)}"]`;
           const id = msg.getAttribute('id');
           if (id) return `#${CSS.escape(id)}`;
           return null;
@@ -427,7 +431,14 @@ function readOpenThread(warnings: string[]): EmailCandidate[] {
           ...(actionUrl ? { actionUrl } : {}),
           ...(threadLocator ? { threadLocator } : {}),
           ...(receivedAt ? { receivedAt } : {}),
-          ...(threadRowSelector ? { domAnchor: { rowSelector: threadRowSelector } } : {}),
+          ...(threadRowSelector
+            ? {
+                domAnchor: {
+                  rowSelector: threadRowSelector,
+                  ...(threadMessageId ? { messageId: threadMessageId } : {}),
+                },
+              }
+            : {}),
         });
       } catch (err) {
         warnings.push(`thread msg ${idx}: ${(err as Error).message}`);

@@ -9,6 +9,76 @@ interface DomResult {
   after?: Record<string, unknown>;
 }
 
+const GMAIL_ROW = 'tr.zA';
+
+/**
+ * Dispatch a full mouse-event sequence. Gmail's controls are wired via its
+ * `jsaction` framework, which reacts to mousedown/mouseup — a bare
+ * element.click() fires only a synthetic `click` and is silently ignored. This
+ * was the actual cause of "Mute checks the row but never marks it read": the
+ * checkbox toggled visually but Gmail never registered the selection, so the
+ * "Mark as read" toolbar button never appeared (#72).
+ */
+function realClick(el: HTMLElement): void {
+  const opts: MouseEventInit = { bubbles: true, cancelable: true, view: window };
+  el.dispatchEvent(new MouseEvent('mouseover', opts));
+  el.dispatchEvent(new MouseEvent('mousedown', opts));
+  el.dispatchEvent(new MouseEvent('mouseup', opts));
+  el.dispatchEvent(new MouseEvent('click', opts));
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Poll `fn` until it returns a truthy value or the timeout elapses. */
+async function waitFor<T>(fn: () => T | null, timeoutMs: number): Promise<T | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const v = fn();
+    if (v) return v;
+    if (Date.now() >= deadline) return fn();
+    await sleep(50);
+  }
+}
+
+/**
+ * Locate a Gmail row for an action. Prefers the stable `messageId`
+ * (data-legacy-message-id) so the row is found by IDENTITY in the user's real
+ * tab — the positional `rowSelector` was resolved in the disposable scan tab and
+ * rarely re-resolves here (#72). Falls back to `rowSelector` for callers (and
+ * providers) that only supplied one.
+ */
+function resolveRow(params: Record<string, unknown>): HTMLElement | null {
+  const messageId = params['messageId'];
+  if (typeof messageId === 'string' && messageId) {
+    const hit = document.querySelector(
+      `[data-legacy-message-id="${CSS.escape(messageId)}"]`
+    ) as HTMLElement | null;
+    if (hit) return (hit.closest(GMAIL_ROW) as HTMLElement | null) ?? hit;
+  }
+  const sel = params['rowSelector'];
+  if (typeof sel === 'string' && sel) return document.querySelector(sel) as HTMLElement | null;
+  return null;
+}
+
+/**
+ * First visible toolbar button whose data-tooltip OR aria-label contains one of
+ * `needles` (case-insensitive). Gmail labels this control inconsistently across
+ * locales/layouts (sometimes data-tooltip, sometimes aria-label), so the old
+ * exact `data-tooltip="Mark as read"` match failed in many real inboxes (#72).
+ */
+function findToolbarButton(needles: string[]): HTMLElement | null {
+  const buttons = Array.from(document.querySelectorAll('[role="button"]')) as HTMLElement[];
+  for (const b of buttons) {
+    const label = (b.getAttribute('data-tooltip') ?? b.getAttribute('aria-label') ?? '').toLowerCase();
+    if (!label) continue;
+    if (!needles.some((n) => label.includes(n))) continue;
+    const rect = b.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue; // not rendered
+    return b;
+  }
+  return null;
+}
+
 /**
  * Executes a single user-APPROVED ProposedAction against the Gmail DOM.
  * This function only runs AFTER ActionPolicyAgent + user approval — it
@@ -39,10 +109,9 @@ export async function executeProposedAction(action: ProposedAction): Promise<Dom
         return { ok: true };
       }
       case 'open_email': {
-        const sel = (action.params['rowSelector'] as string) ?? '';
-        const row = document.querySelector(sel) as HTMLElement | null;
+        const row = resolveRow(action.params);
         if (!row) return { ok: false, error: 'row not found' };
-        row.click();
+        realClick(row);
         return { ok: true };
       }
       case 'click_unsubscribe': {
@@ -56,30 +125,53 @@ export async function executeProposedAction(action: ProposedAction): Promise<Dom
         return { ok: true, after: { openedHref: href } };
       }
       case 'mark_read': {
-        const sel = (action.params['rowSelector'] as string) ?? '';
-        const row = document.querySelector(sel) as HTMLElement | null;
+        const row = resolveRow(action.params);
         if (!row) return { ok: false, error: 'row not found' };
-        // Gmail mark-as-read button (data-tooltip="Mark as read") only exists
-        // when the row is selected. Click the row checkbox first.
+        // Inbox rows mark unread with the `zE` class. If it's already read,
+        // there's nothing to do — short-circuit so the toast doesn't over-count.
+        // (Only meaningful for inbox rows; a thread-view message element has no
+        // such class, so we fall through and let the toolbar path handle it.)
+        if (row.matches(GMAIL_ROW) && !row.classList.contains('zE')) {
+          return { ok: true, after: { alreadyRead: true } };
+        }
+        // Gmail's "Mark as read" control only appears in the selection toolbar
+        // once a row is selected. Select via the checkbox with a REAL mouse
+        // sequence (a bare .click() doesn't trip Gmail's jsaction), wait for the
+        // toolbar button to appear, then click it.
         const checkbox = row.querySelector('div[role="checkbox"]') as HTMLElement | null;
-        checkbox?.click();
-        const markBtn = document.querySelector(
-          'div[role="button"][data-tooltip="Mark as read"]'
-        ) as HTMLElement | null;
-        if (!markBtn) return { ok: false, error: 'mark-as-read button not visible' };
-        markBtn.click();
-        return { ok: true };
+        if (!checkbox) return { ok: false, error: 'row checkbox not found' };
+        realClick(checkbox);
+        const markBtn = await waitFor(() => findToolbarButton(['mark as read']), 1500);
+        if (!markBtn) {
+          // Don't leave the row selected if we couldn't complete the action.
+          realClick(checkbox);
+          return { ok: false, error: 'mark-as-read control not found' };
+        }
+        realClick(markBtn);
+        return { ok: true, after: { marked: true } };
       }
       case 'archive': {
-        const sel = (action.params['rowSelector'] as string) ?? '';
-        const row = document.querySelector(sel) as HTMLElement | null;
+        const row = resolveRow(action.params);
         if (!row) return { ok: false, error: 'row not found' };
-        const archiveBtn = row.querySelector(
-          'div[role="button"][data-tooltip*="Archive"]'
-        ) as HTMLElement | null;
-        if (!archiveBtn) return { ok: false, error: 'archive button not visible on row' };
-        archiveBtn.click();
-        return { ok: true };
+        // Prefer the per-row hover Archive button; fall back to selecting the row
+        // and using the selection toolbar's Archive control.
+        const rowBtn = Array.from(row.querySelectorAll('[role="button"]')).find(
+          (b) => /archive/i.test(b.getAttribute('data-tooltip') ?? b.getAttribute('aria-label') ?? '')
+        ) as HTMLElement | undefined;
+        if (rowBtn) {
+          realClick(rowBtn);
+          return { ok: true, after: { archived: true } };
+        }
+        const checkbox = row.querySelector('div[role="checkbox"]') as HTMLElement | null;
+        if (!checkbox) return { ok: false, error: 'row checkbox not found' };
+        realClick(checkbox);
+        const archiveBtn = await waitFor(() => findToolbarButton(['archive']), 1500);
+        if (!archiveBtn) {
+          realClick(checkbox);
+          return { ok: false, error: 'archive control not found' };
+        }
+        realClick(archiveBtn);
+        return { ok: true, after: { archived: true } };
       }
       case 'apply_label':
       case 'suggest_label': {
