@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  AccountIdentity,
   ActionLedgerEntry,
   AgentTraceEvent,
   ClutterFinding,
@@ -20,6 +21,9 @@ interface PanelState {
   apiKey: string;
   dryRun: boolean;
   killSwitch: boolean;
+
+  /** The mail account the active tab is signed in as, or null if unknown. */
+  account: AccountIdentity | null;
 
   scan: ScanResult | null;
   scanStatus: ScanStatus;
@@ -47,6 +51,7 @@ export const usePanelStore = create<PanelState>((set) => ({
   apiKey: '',
   dryRun: true,
   killSwitch: false,
+  account: null,
   scan: null,
   scanStatus: 'idle',
   scanProgress: { loaded: 0, target: 0 },
@@ -112,6 +117,8 @@ export const usePanelStore = create<PanelState>((set) => ({
         }
         case 'bg/trace_event':
           return { traceEvents: [...s.traceEvents, msg.event].slice(-300) };
+        case 'bg/account_identity':
+          return { account: msg.identity };
         case 'bg/chat_reply':
           // Legacy reply path; CopilotKit renders chat now. Ignored.
           return {};

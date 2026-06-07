@@ -8,6 +8,7 @@ export const STORAGE_KEYS = {
   memorySuggestions: 'es.memorySuggestions.v1',
   traceEvents: 'es.trace.v1',
   serverUrl: 'es.server.url.v1',
+  account: 'es.account.v1',
 } as const;
 
 export const DEFAULTS = {

@@ -188,6 +188,93 @@ button.icon.spinning svg { animation: spin 900ms linear infinite; }
 .status-chip.warn .dot { background: var(--warn); }
 .status-chip.critical .dot { background: var(--danger); }
 
+/* CONNECTED ACCOUNT — the constant "which inbox?" signal (issue #10) */
+.account-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  min-width: 0;
+}
+.account-avatar {
+  position: relative;
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+.account-avatar img,
+.account-monogram {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  object-fit: cover;
+  display: block;
+}
+.account-monogram {
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--bg);
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+}
+.account-provider {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1.5px var(--surface);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.account-provider svg { width: 11px; height: 11px; display: block; }
+.account-email {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-provider-name {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.account-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-strong);
+  cursor: pointer;
+}
+.account-connect:hover { color: var(--text); }
+.account-connect-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-softer);
+}
+
 /* AMBIENT PULSE — the living activity hero */
 .pulse {
   margin: 6px 16px 10px;

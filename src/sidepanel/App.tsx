@@ -7,6 +7,7 @@ import { LedgerTab } from './tabs/LedgerTab';
 import { ChatTab } from './tabs/ChatTab';
 import { SettingsTab } from './tabs/SettingsTab';
 import { AgentActivityPanel } from './cockpit/AgentActivityPanel';
+import { AccountIndicator } from './AccountIndicator';
 
 type TabId = 'today' | 'cleanup' | 'chat';
 type Overlay = null | 'history' | 'settings';
@@ -50,7 +51,7 @@ export function App(): JSX.Element {
     <div className="app">
       <header className="brand">
         <div className="brand-left">
-          <h1 className="wordmark">EmailSignal</h1>
+          <h1 className="wordmark">Email Signal</h1>
           <span className={`status-chip ${statusTone}`}>
             <span className="dot" />
             {statusLabel}
@@ -92,6 +93,8 @@ export function App(): JSX.Element {
           />
         </div>
       </header>
+
+      <AccountIndicator />
 
       <AgentActivityPanel />
 
