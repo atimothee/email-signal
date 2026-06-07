@@ -92,9 +92,16 @@ export function ConfidenceBadge({ value, label = 'Confidence' }: ConfidenceBadge
   const pct = Math.round(value * 100);
   const tone = pct >= 80 ? 'success' : pct >= 55 ? '' : 'warn';
   const wordy = pct >= 80 ? 'high' : pct >= 55 ? 'medium' : 'low';
+  const filled = pct >= 80 ? 3 : pct >= 55 ? 2 : 1;
+  // A soft fill, not a pseudo-scientific percentage (design-guidelines.md).
   return (
-    <span className={`pill ${tone}`} title={`${label}: ${pct}% (${wordy})`}>
-      {pct}% sure
+    <span className={`pill ${tone} conf`} title={`${label}: ${wordy}`}>
+      <span className="conf-dots" aria-hidden>
+        {[0, 1, 2].map((i) => (
+          <span key={i} className={`conf-dot ${i < filled ? 'on' : ''}`} />
+        ))}
+      </span>
+      {wordy}
     </span>
   );
 }

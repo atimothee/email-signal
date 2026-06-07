@@ -6,6 +6,7 @@
 export * from './email.js';
 export * from './clutter.js';
 export * from './priority.js';
+export * from './decision.js';
 export * from './action.js';
 export * from './memory.js';
 export * from './brief.js';

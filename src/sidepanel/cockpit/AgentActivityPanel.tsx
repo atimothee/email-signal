@@ -3,19 +3,8 @@ import { usePanelStore } from '../state/store';
 import { AgentTraceTimeline } from '../cards/AgentTraceTimeline';
 import type { ActionLedgerEntry, AgentTraceEvent, ProposedAction } from '@schemas/index';
 
-const ACTIVE_KINDS = new Set<AgentTraceEvent['kind']>([
-  'session_start',
-  'turn_start',
-  'agent_start',
-  'agent_handoff',
-  'tool_call_start',
-  'classification_batch',
-]);
-
 const ATTENTION_KINDS = new Set<AgentTraceEvent['kind']>(['approval_requested']);
 const ERROR_KINDS = new Set<AgentTraceEvent['kind']>(['error', 'action_blocked']);
-
-const STILL_ACTIVE_WINDOW_MS = 8000;
 
 function humanizeAgent(agent?: string): string {
   if (!agent) return '';
@@ -122,6 +111,9 @@ export function AgentActivityPanel(): JSX.Element {
   const proposedActions = usePanelStore((s) => s.proposedActions);
   const ledger = usePanelStore((s) => s.ledger);
   const dryRun = usePanelStore((s) => s.dryRun);
+  const scanStatus = usePanelStore((s) => s.scanStatus);
+  const scanProgress = usePanelStore((s) => s.scanProgress);
+  const decisions = usePanelStore((s) => s.decisions);
   const [open, setOpen] = useState(false);
   // tick every few seconds so "X ago" stays fresh and the active state can decay.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -131,22 +123,47 @@ export function AgentActivityPanel(): JSX.Element {
   }, []);
 
   const latest = events[events.length - 1];
-  const ageMs = latest ? nowMs - new Date(latest.at).getTime() : Infinity;
-  const isFresh = ageMs < STILL_ACTIVE_WINDOW_MS;
+  const pendingCount = Object.values(proposedActions).filter(
+    (a) => a.approvalStatus === 'pending'
+  ).length;
 
+  // The pulse follows the REAL lifecycle (scanStatus), not the raw trace tail —
+  // so it never says "All done" while the next batch is still running.
   let state: 'idle' | 'working' | 'attention' | 'error' = 'idle';
-  if (latest) {
-    if (ERROR_KINDS.has(latest.kind)) state = 'error';
-    else if (ATTENTION_KINDS.has(latest.kind)) state = 'attention';
-    else if (isFresh && ACTIVE_KINDS.has(latest.kind)) state = 'working';
-  }
+  let message: string;
+  let sub: string;
 
-  const message = describe(latest, proposedActions, ledger, dryRun);
-  const sub =
-    !latest ? 'Click scan to get started'
-    : state === 'working' ? 'Working in the background'
-    : state === 'attention' ? 'Tap "Today" to review'
-    : `Last activity ${relativeTime(latest.at, nowMs)}`;
+  if (scanStatus === 'error') {
+    state = 'error';
+    message = 'Something went wrong';
+    sub = 'Open the timeline below for details';
+  } else if (scanStatus === 'reading') {
+    state = 'working';
+    message = 'Reading your inbox…';
+    sub = scanProgress.target
+      ? `Loaded ${scanProgress.loaded} of ~${scanProgress.target} emails`
+      : `Loaded ${scanProgress.loaded} emails`;
+  } else if (scanStatus === 'thinking') {
+    state = 'working';
+    message = 'Figuring out what matters…';
+    sub = 'Reading between the lines of your inbox';
+  } else if (pendingCount > 0) {
+    state = 'attention';
+    message = pendingCount === 1 ? '1 thing waiting for your approval' : `${pendingCount} things waiting for your approval`;
+    sub = 'Tap "Today" to review';
+  } else if (scanStatus === 'done') {
+    state = 'idle';
+    message = decisions.length
+      ? `${decisions.length} decision${decisions.length === 1 ? '' : 's'} for you today`
+      : 'All clear — nothing pressing';
+    sub = decisions.length ? 'Tap "Today" to see them' : 'I read your inbox and found no to-dos';
+  } else {
+    // Idle / first run — fall back to the latest trace in plain language.
+    if (latest && ERROR_KINDS.has(latest.kind)) state = 'error';
+    else if (latest && ATTENTION_KINDS.has(latest.kind)) state = 'attention';
+    message = describe(latest, proposedActions, ledger, dryRun);
+    sub = latest ? `Last activity ${relativeTime(latest.at, nowMs)}` : 'Click scan to get started';
+  }
 
   return (
     <>

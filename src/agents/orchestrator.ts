@@ -6,13 +6,12 @@ import {
   ClutterSenderGroupSchema,
   DailyBrief,
   DailyBriefSchema,
+  Decision,
   EmailCandidate,
-  PriorityFinding,
   ProposedAction,
   ProposedActionSchema,
   ScanResult,
 } from '@schemas/index';
-import { quickClutterPass, quickPriorityPass } from './heuristics';
 import { checkPolicy } from './policy';
 import { getMemoryStore } from '@/memory';
 import { isDryRun, isKillSwitchOn, USER_ID } from './runtime';
@@ -28,7 +27,7 @@ import {
   PolicyDecision,
   PolicyDecisionSchema,
 } from './types';
-import { runLLMOrchestrator } from './llm-runner';
+import { classifyViaSidecar, chatViaSidecar } from './llm-runner';
 import { log } from '@/common/log';
 
 interface OrchestratorTurnInput {
@@ -38,9 +37,6 @@ interface OrchestratorTurnInput {
   approval?: ApprovalRecord;
   sourceTabId?: number;
 }
-
-/** Size of each parallel classifier batch. */
-const BATCH_SIZE = 8;
 
 /**
  * Single entry point used by the service worker.
@@ -66,7 +62,13 @@ export async function runOrchestratorTurn(input: OrchestratorTurnInput): Promise
     turnId,
     data: { trigger: input.trigger },
   });
+  // The scan lifecycle (reading → thinking) is driven by the service worker +
+  // content script; other triggers announce their own "working" state here.
+  if (input.trigger !== 'scan' && input.trigger !== 'periodic') {
+    await broadcast({ kind: 'bg/turn_started', trigger: input.trigger });
+  }
   const started = Date.now();
+  let ok = true;
 
   try {
     const ctx = await buildContext(turnId);
@@ -89,18 +91,25 @@ export async function runOrchestratorTurn(input: OrchestratorTurnInput): Promise
         break;
     }
   } catch (err) {
+    ok = false;
     log.error('orchestrator turn error', err);
     await recordTrace({
       kind: 'error',
       turnId,
       message: (err as Error).message,
     });
+    // Surface the failure to the UI — the sidecar is required, so an error here
+    // (e.g. it's not running) must be shown, never silently swallowed.
+    await broadcast({ kind: 'bg/error', message: (err as Error).message });
   } finally {
     await recordTrace({
       kind: 'turn_end',
       turnId,
       elapsedMs: Date.now() - started,
     });
+    if (input.trigger !== 'periodic') {
+      await broadcast({ kind: 'bg/turn_done', ok });
+    }
   }
 }
 
@@ -124,26 +133,43 @@ async function handleScan(scan: ScanResult, ctx: AgentContext): Promise<void> {
     turnId: ctx.turnId,
     data: { candidates: scan.candidates.length },
   });
+  // We have the emails — now we're thinking, not reading.
+  await broadcast({ kind: 'bg/scan_progress', phase: 'thinking', loaded: scan.candidates.length });
 
-  // 1) MemoryAgent FIRST — preferences influence downstream ranking.
+  // 1) MemoryAgent FIRST — preferences influence synthesis + ranking.
   const memoryRun = await runMemoryAgent(ctx);
   ctx.preferences = memoryRun.output ?? [];
 
-  // 2) Parallel handoffs to clutter + priority classifiers, batched.
-  const clutterRun = await runClutterAgentParallel(scan.candidates, ctx);
-  const priorityRun = await runPriorityAgentParallel(scan.candidates, ctx);
-  const clutter = clutterRun.output ?? [];
-  const priorities = priorityRun.output ?? [];
+  // 2) All intelligence runs in the sidecar (OpenAI Agents SDK): clutter
+  //    classification + decision synthesis. The extension never classifies.
+  //    If the sidecar is down, this throws and the turn-level handler surfaces
+  //    the error to the UI — there is no local fallback.
+  await emitHandoff(
+    makeHandoff(AGENT_NAMES.orchestrator, AGENT_NAMES.priority, 'classify_priority', ctx.turnId, {
+      batchIndex: 0,
+      batchCount: 1,
+      candidates: scan.candidates,
+      preferences: ctx.preferences,
+    })
+  );
+  const { decisions, clutter } = await classifyViaSidecar(ctx.turnId, scan.candidates);
+  await recordTrace({
+    kind: 'agent_end',
+    agent: AGENT_NAMES.priority,
+    turnId: ctx.turnId,
+    message: `${decisions.length} decision(s), ${clutter.length} clutter`,
+  });
 
-  // 3) Apply preference filters (ignored_sender — never surface).
-  const filteredPriorities = filterByPreferences(priorities, ctx);
+  // 3) Apply preference filters (ignored_sender — never surface as a decision).
+  const filtered = filterDecisionsByPreferences(decisions, ctx);
 
   const groups = groupClutter(clutter, scan.candidates);
+  await broadcast({ kind: 'bg/decisions', decisions: filtered });
   await broadcast({
     kind: 'bg/classification',
     clutter,
     groups,
-    priorities: filteredPriorities,
+    priorities: [],
   });
 
   // 4) For every suggested unsubscribe, propose an action — but only after
@@ -214,8 +240,8 @@ async function handleChat(text: string, ctx: AgentContext): Promise<void> {
     message: text,
   });
   try {
-    const reply = await runLLMOrchestrator({ turnId: ctx.turnId, userMessage: text });
-    await broadcast({ kind: 'bg/chat_reply', turnId: ctx.turnId, text: reply.text ?? '…' });
+    const reply = await chatViaSidecar(ctx.turnId, text);
+    await broadcast({ kind: 'bg/chat_reply', turnId: ctx.turnId, text: reply });
   } catch (err) {
     await broadcast({
       kind: 'bg/chat_reply',
@@ -309,159 +335,17 @@ async function runMemoryAgent(ctx: AgentContext): Promise<AgentRunResult<typeof 
   }
 }
 
-// ---------------- Clutter / Priority agents (parallel batches) ----------------
+// ---------------- Preference filtering ----------------
 
-function chunk<T>(items: T[], size: number): T[][] {
-  const batches: T[][] = [];
-  for (let i = 0; i < items.length; i += size) batches.push(items.slice(i, i + size));
-  return batches.length === 0 ? [[]] : batches;
-}
-
-async function runClutterAgentParallel(
-  candidates: EmailCandidate[],
-  ctx: AgentContext
-): Promise<AgentRunResult<ClutterFinding[]>> {
-  const start = Date.now();
-  // Heuristic pass first; only ambiguous candidates need the LLM.
-  const heuristic: ClutterFinding[] = [];
-  const ambiguous: EmailCandidate[] = [];
-  for (const c of candidates) {
-    const cl = quickClutterPass(c);
-    if (cl) heuristic.push(cl);
-    else ambiguous.push(c);
-  }
-
-  const batches = chunk(ambiguous, BATCH_SIZE);
-  const handoffs: AgentHandoffPayload[] = batches.map((batch, i) =>
-    makeHandoff(
-      AGENT_NAMES.orchestrator,
-      AGENT_NAMES.clutter,
-      'classify_clutter',
-      ctx.turnId,
-      {
-        batchIndex: i,
-        batchCount: batches.length,
-        candidates: batch,
-        preferences: ctx.preferences,
-      }
-    )
-  );
-  for (const h of handoffs) await emitHandoff(h);
-
-  if (ambiguous.length === 0) {
-    return finishRun(AGENT_NAMES.clutter, start, heuristic, handoffs);
-  }
-
-  try {
-    // Parallelize batches over the sidecar. The sidecar in turn runs each
-    // batch under a fresh agent invocation, so true parallelism is preserved.
-    const settled = await Promise.allSettled(
-      batches.map((batch) =>
-        runLLMOrchestrator({ turnId: ctx.turnId, candidates: batch })
-      )
-    );
-    const out = [...heuristic];
-    for (const r of settled) {
-      if (r.status === 'fulfilled') out.push(...r.value.clutter);
-      else {
-        await recordTrace({
-          kind: 'error',
-          agent: AGENT_NAMES.clutter,
-          turnId: ctx.turnId,
-          message: `clutter batch failed: ${(r.reason as Error).message}`,
-        });
-      }
-    }
-    await recordTrace({
-      kind: 'agent_end',
-      agent: AGENT_NAMES.clutter,
-      turnId: ctx.turnId,
-      message: `${out.length} findings across ${batches.length} batches`,
-    });
-    return finishRun(AGENT_NAMES.clutter, start, out, handoffs);
-  } catch (err) {
-    log.warn('clutter classification failed; using heuristics only', err);
-    return finishRun(AGENT_NAMES.clutter, start, heuristic, handoffs, (err as Error).message);
-  }
-}
-
-async function runPriorityAgentParallel(
-  candidates: EmailCandidate[],
-  ctx: AgentContext
-): Promise<AgentRunResult<PriorityFinding[]>> {
-  const start = Date.now();
-  const heuristic: PriorityFinding[] = [];
-  const ambiguous: EmailCandidate[] = [];
-  for (const c of candidates) {
-    const pr = quickPriorityPass(c);
-    if (pr) heuristic.push(pr);
-    else ambiguous.push(c);
-  }
-
-  const batches = chunk(ambiguous, BATCH_SIZE);
-  const handoffs: AgentHandoffPayload[] = batches.map((batch, i) =>
-    makeHandoff(
-      AGENT_NAMES.orchestrator,
-      AGENT_NAMES.priority,
-      'classify_priority',
-      ctx.turnId,
-      {
-        batchIndex: i,
-        batchCount: batches.length,
-        candidates: batch,
-        preferences: ctx.preferences,
-      }
-    )
-  );
-  for (const h of handoffs) await emitHandoff(h);
-
-  if (ambiguous.length === 0) {
-    return finishRun(AGENT_NAMES.priority, start, heuristic, handoffs);
-  }
-
-  try {
-    const settled = await Promise.allSettled(
-      batches.map((batch) =>
-        runLLMOrchestrator({ turnId: ctx.turnId, candidates: batch })
-      )
-    );
-    const out = [...heuristic];
-    for (const r of settled) {
-      if (r.status === 'fulfilled') out.push(...r.value.priorities);
-      else {
-        await recordTrace({
-          kind: 'error',
-          agent: AGENT_NAMES.priority,
-          turnId: ctx.turnId,
-          message: `priority batch failed: ${(r.reason as Error).message}`,
-        });
-      }
-    }
-    await recordTrace({
-      kind: 'agent_end',
-      agent: AGENT_NAMES.priority,
-      turnId: ctx.turnId,
-      message: `${out.length} findings across ${batches.length} batches`,
-    });
-    return finishRun(AGENT_NAMES.priority, start, out, handoffs);
-  } catch (err) {
-    log.warn('priority classification failed; using heuristics only', err);
-    return finishRun(AGENT_NAMES.priority, start, heuristic, handoffs, (err as Error).message);
-  }
-}
-
-function filterByPreferences(
-  priorities: PriorityFinding[],
-  ctx: AgentContext
-): PriorityFinding[] {
+function filterDecisionsByPreferences(decisions: Decision[], ctx: AgentContext): Decision[] {
   const ignored = new Set(
     ctx.preferences
       .filter((p) => p.kind === 'ignored_sender' && typeof p.value === 'string')
       .map((p) => (p.value as string).toLowerCase())
   );
-  if (ignored.size === 0) return priorities;
-  return priorities.filter(
-    (p) => !ignored.has(p.senderDisplay.toLowerCase())
+  if (ignored.size === 0) return decisions;
+  return decisions.filter(
+    (d) => !d.senders.some((s) => ignored.has(s.toLowerCase()))
   );
 }
 
@@ -867,6 +751,6 @@ export const __test = {
   runUnsubscribeAgent,
   runAuditLedgerAgent,
   runMemoryAgent,
-  filterByPreferences,
+  filterDecisionsByPreferences,
   buildContext,
 };

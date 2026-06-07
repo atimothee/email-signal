@@ -3,6 +3,7 @@ import { ScanResultSchema, EmailCandidateSchema } from './email.js';
 import { ProposedActionSchema, ApprovalRecordSchema, ActionLedgerEntrySchema } from './action.js';
 import { ClutterFindingSchema, ClutterSenderGroupSchema } from './clutter.js';
 import { PriorityFindingSchema } from './priority.js';
+import { DecisionSchema } from './decision.js';
 import { DailyBriefSchema } from './brief.js';
 import { AgentTraceEventSchema } from './trace.js';
 import { MemorySuggestionSchema, UserPreferenceSchema } from './memory.js';
@@ -16,6 +17,11 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   // content -> background
   z.object({ kind: z.literal('content/ready'), tabId: z.number().optional() }),
   z.object({ kind: z.literal('content/scan_result'), scan: ScanResultSchema }),
+  z.object({
+    kind: z.literal('content/scan_progress'),
+    loaded: z.number().int().min(0),
+    target: z.number().int().min(0),
+  }),
   z.object({
     kind: z.literal('content/dom_action_result'),
     proposedActionId: z.string(),
@@ -63,12 +69,32 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
     surface: z.enum(['priority', 'clutter', 'brief', 'memory']),
     correction: z.string().min(1).max(800),
   }),
+  z.object({ kind: z.literal('panel/highlight'), selector: z.string() }),
   z.object({ kind: z.literal('panel/kill_switch'), enabled: z.boolean() }),
   z.object({ kind: z.literal('panel/set_dry_run'), enabled: z.boolean() }),
   z.object({ kind: z.literal('panel/save_preference'), preference: UserPreferenceSchema }),
 
   // background -> sidepanel
   z.object({ kind: z.literal('bg/scan_complete'), scan: ScanResultSchema }),
+  z.object({
+    kind: z.literal('bg/turn_started'),
+    trigger: z.enum(['scan', 'brief', 'chat', 'approval', 'periodic']).optional(),
+  }),
+  z.object({
+    kind: z.literal('bg/scan_progress'),
+    phase: z.enum(['reading', 'thinking']),
+    loaded: z.number().int().min(0),
+    target: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    kind: z.literal('bg/turn_done'),
+    ok: z.boolean().default(true),
+    decisions: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    kind: z.literal('bg/decisions'),
+    decisions: z.array(DecisionSchema),
+  }),
   z.object({
     kind: z.literal('bg/classification'),
     clutter: z.array(ClutterFindingSchema),

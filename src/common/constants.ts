@@ -17,6 +17,10 @@ export const DEFAULTS = {
   maxCandidatesPerScan: 100,
   bodyExcerptChars: 512,
   approvalExpiryMs: 1000 * 60 * 30, // 30 minutes
+  /** How many recent emails to deep-scan before sending to the sidecar. */
+  deepScanTarget: 500,
+  /** Safety cap on scroll iterations during a deep scan. */
+  deepScanMaxScrolls: 60,
 } as const;
 
 export const ALARMS = {

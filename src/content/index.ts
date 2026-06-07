@@ -1,7 +1,8 @@
 /// <reference types="chrome" />
 import { parseExtMessage } from '@schemas/index';
 import { sendToBackground } from '@/common/messaging';
-import { scanGmailDom } from '@/providers/gmail';
+import { scanGmailDom, scanGmailInboxDeep } from '@/providers/gmail';
+import { DEFAULTS } from '@/common/constants';
 import { applyHighlight, removeHighlight } from './highlighter';
 import { executeProposedAction } from './dom-actions';
 import { log } from '@/common/log';
@@ -17,7 +18,18 @@ chrome.runtime.onMessage.addListener((raw) => {
     try {
       switch (msg.kind) {
         case 'bg/request_scan': {
-          const scan = await scanGmailDom(msg.source);
+          // Inbox scans go deep: scroll to load ~500 recent emails before we
+          // synthesize, reporting progress as we go. Thread/search stay shallow.
+          const scan =
+            msg.source === 'inbox'
+              ? await scanGmailInboxDeep(DEFAULTS.deepScanTarget, (loaded) => {
+                  void sendToBackground({
+                    kind: 'content/scan_progress',
+                    loaded,
+                    target: DEFAULTS.deepScanTarget,
+                  });
+                })
+              : await scanGmailDom(msg.source);
           await sendToBackground({ kind: 'content/scan_result', scan });
           break;
         }

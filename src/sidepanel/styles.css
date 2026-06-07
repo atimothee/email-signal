@@ -137,7 +137,8 @@ button.icon.active {
   color: var(--accent-strong);
   box-shadow: inset 0 0 0 1px var(--accent-soft);
 }
-button.icon.spinning svg { animation: spin 800ms var(--ease-out); }
+/* Honest scan spinner: spins for as long as real work is happening. */
+button.icon.spinning svg { animation: spin 900ms linear infinite; }
 
 .app {
   display: grid;
@@ -891,6 +892,162 @@ code {
   from { opacity: 0; transform: scaleY(0.9); transform-origin: top; max-height: 0; }
   to   { opacity: 1; transform: scaleY(1); max-height: 220px; }
 }
+
+/* ── Decisions (Today) ──────────────────────────────── */
+/* Each theme carries a low-saturation color so the list reads at a glance.
+   Color is confined to a left edge + a small chip — never a saturated flood. */
+.decision { border-left: 3px solid var(--tint, var(--accent)); }
+.decision.t-money    { --tint: var(--success); --tint-soft: var(--success-soft); }
+.decision.t-reply    { --tint: var(--accent);  --tint-soft: var(--accent-soft); }
+.decision.t-schedule { --tint: var(--warn);    --tint-soft: var(--warn-soft); }
+.decision.t-job      { --tint: #b58cff;         --tint-soft: rgba(181, 140, 255, 0.16); }
+.decision.t-travel   { --tint: #57d7d2;         --tint-soft: rgba(87, 215, 210, 0.16); }
+.decision.t-security { --tint: var(--danger);   --tint-soft: var(--danger-soft); }
+.decision.t-admin    { --tint: var(--text-faint); --tint-soft: var(--surface-2); }
+.decision.t-other    { --tint: var(--text-faint); --tint-soft: var(--surface-2); }
+
+.decision-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.theme-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--tint-soft, var(--accent-soft));
+  color: var(--tint, var(--accent-strong));
+}
+.urgency-flag {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+.urgency-flag.u-critical { color: var(--danger); background: var(--danger-soft); }
+.urgency-flag.u-high { color: var(--warn); background: var(--warn-soft); }
+.pill.due {
+  margin-left: auto;
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+.decision-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.decision-why {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.decision-foot {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.decision-senders { color: var(--text-faint); }
+.decision .actions { margin-top: 10px; align-items: center; }
+.decision .actions .primary {
+  background: var(--tint, var(--accent));
+  color: #06121f;
+  box-shadow: 0 4px 16px -8px var(--tint, var(--accent-glow));
+}
+.decision .actions .primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* Theme sub-label inside a clustered run */
+.theme-subhead {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 14px 0 6px;
+}
+
+/* Scanning state (Today / Cleanup) */
+.scan-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 2px 14px;
+}
+.scan-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: spin 800ms linear infinite;
+  flex-shrink: 0;
+}
+.scan-status-title { font-size: 13px; font-weight: 600; color: var(--text); }
+
+/* ── Cleanup (themed buckets) ───────────────────────── */
+.cleanup { border-left: 3px solid var(--tint, var(--accent)); }
+.cleanup.c-promo   { --tint: var(--warn);   --tint-soft: var(--warn-soft); }
+.cleanup.c-news    { --tint: var(--accent); --tint-soft: var(--accent-soft); }
+.cleanup.c-social  { --tint: #b58cff;        --tint-soft: rgba(181, 140, 255, 0.16); }
+.cleanup.c-cold    { --tint: #57d7d2;        --tint-soft: rgba(87, 215, 210, 0.16); }
+.cleanup.c-receipt { --tint: var(--success); --tint-soft: var(--success-soft); }
+.cleanup.c-notify  { --tint: var(--text-faint); --tint-soft: var(--surface-2); }
+.cleanup.c-other   { --tint: var(--text-faint); --tint-soft: var(--surface-2); }
+.cleanup .theme-chip { background: var(--tint-soft); color: var(--tint); }
+
+.cleanup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.cleanup-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.cleanup-senders { list-style: none; margin: 0; padding: 0; }
+.cleanup-sender {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.cleanup-sender:last-child { border-bottom: none; }
+.cleanup-sender-info { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cleanup-sender-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cleanup-sender-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.cleanup-more { margin-top: 8px; }
+button.slim { padding: 4px 10px; font-size: 11.5px; }
+button.primary.slim { color: #06121f; }
+
+/* Confidence as a soft fill, not a number */
+.pill.conf { gap: 5px; }
+.conf-dots { display: inline-flex; gap: 2px; }
+.conf-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.28;
+}
+.conf-dot.on { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
