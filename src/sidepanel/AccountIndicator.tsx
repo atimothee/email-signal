@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { usePanelStore } from './state/store';
-import { openGmailTab } from './state/bridge';
+import { openMailTab } from './state/bridge';
 import type { MailProvider } from '@schemas/index';
+import { PROVIDER_LABEL } from '@/providers/url-patterns';
 
 /**
  * Top-bar identity chip (issue #10). A constant, zero-click answer to "which
@@ -9,11 +10,6 @@ import type { MailProvider } from '@schemas/index';
  * back to a monogram when the provider gives no photo, and to a "Connect"
  * call-to-action when no account has been read yet.
  */
-
-const PROVIDER_LABEL: Record<MailProvider, string> = {
-  gmail: 'Gmail',
-  outlook: 'Outlook',
-};
 
 function ProviderGlyph({ provider }: { provider: MailProvider }): JSX.Element {
   if (provider === 'outlook') {
@@ -53,7 +49,11 @@ export function AccountIndicator(): JSX.Element {
   if (!account) {
     return (
       <div className="account-bar">
-        <button className="account-connect" onClick={openGmailTab} title="Open Gmail to connect an inbox">
+        <button
+          className="account-connect"
+          onClick={() => openMailTab()}
+          title="Open Gmail or Outlook to connect an inbox"
+        >
           <span className="account-connect-dot" />
           Connect an inbox
         </button>

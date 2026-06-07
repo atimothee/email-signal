@@ -5,7 +5,7 @@ import { MemorySuggestionCard } from '../cards/MemorySuggestionCard';
 import { DecisionCard } from '../cards/DecisionCard';
 import { BatchActionReviewPanel } from '../cards/BatchActionReviewPanel';
 import { EmptyState, Skeleton, ErrorState } from '../cards/primitives';
-import { send, openGmailTab } from '../state/bridge';
+import { send, openMailTab } from '../state/bridge';
 import type { Decision, DecisionTheme, ProposedAction } from '@schemas/index';
 
 const THEME_LABEL: Record<DecisionTheme, string> = {
@@ -202,10 +202,10 @@ export function DailyBriefTab(): JSX.Element {
     }
     return (
       <EmptyState
-        title="Open Gmail to get started"
-        body="Email Signal reads the Gmail tab you're signed into. Open Gmail, then scan — I'll surface only what needs you."
-        action={{ label: 'Open Gmail', onClick: openGmailTab }}
-        hint="Once Gmail is open, hit Scan and I'll read your last few hundred emails."
+        title="Open Gmail or Outlook to get started"
+        body="Email Signal reads the mail tab you're signed into. Open Gmail or Outlook, then scan — I'll surface only what needs you."
+        action={{ label: 'Open mailbox', onClick: () => openMailTab() }}
+        hint="Once your inbox is open, hit Scan and I'll read your last few hundred emails."
       />
     );
   }

@@ -11,9 +11,15 @@ import { postFeedback } from '@/common/server-client';
 import { registerNotificationClicks } from './notifications';
 import { AccountIdentitySchema } from '@schemas/index';
 import type { ExtMessage } from '@schemas/index';
+import {
+  ALL_PROVIDER_MATCH_PATTERNS,
+  PROVIDER_LABEL,
+  buildInboxUrl,
+  providerFromUrl,
+} from '@/providers/url-patterns';
 
 /**
- * Disposable Gmail tabs we opened just to paginate-scan (Option B, brief-focus
+ * Disposable mail tabs we opened just to paginate-scan (Option B, brief-focus
  * hybrid). Maps the scan tab's id -> the user's original tab to re-focus when
  * we're done. When a scan_result arrives from one of these, we restore focus
  * and close it.
@@ -30,7 +36,7 @@ function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
       chrome.tabs.onUpdated.removeListener(onUpdated);
       clearTimeout(timer);
       if (ok) resolve();
-      else reject(new Error('Background Gmail tab load timed out'));
+      else reject(new Error('Background mail tab load timed out'));
     };
     const onUpdated = (id: number, info: chrome.tabs.TabChangeInfo) => {
       if (id === tabId && info.status === 'complete') finish(true);
@@ -45,16 +51,6 @@ function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
     );
     const timer = setTimeout(() => finish(false), timeoutMs);
   });
-}
-
-/**
- * Normalize a Gmail tab URL into a clean inbox URL for the SAME account
- * (/mail/u/N/). We scan from a fresh #inbox view so pagination starts at page 1.
- */
-function buildInboxUrl(srcUrl: string | undefined): string {
-  const m = srcUrl?.match(/mail\.google\.com\/mail\/u\/(\d+)/);
-  const u = m?.[1] ?? '0';
-  return `https://mail.google.com/mail/u/${u}/#inbox`;
 }
 
 /**
@@ -94,26 +90,30 @@ async function restoreFocusAndClose(scanTabId: number, refocusTabId: number | un
 }
 
 /**
- * Open a disposable Gmail tab, briefly FOCUS it (so Gmail actually renders and
- * honors page navigation — a hidden tab rejects both clicks and #p2 hash nav),
- * let its content script paginate the inbox, then return focus to the user's
- * original tab and close the scan tab (done in `content/scan_result`). The
- * user's own Gmail tab is never paged. Requires an existing signed-in Gmail tab
- * so we know the account + have a session.
+ * Open a disposable mail tab (Gmail OR Outlook, matching whichever provider
+ * the user is already signed into), briefly FOCUS it (so the SPA actually
+ * renders and honors page navigation / virtualized scroll — a hidden tab
+ * rejects both clicks and #p2-style nav), let its content script paginate the
+ * inbox, then return focus to the user's original tab and close the scan tab
+ * (done in `content/scan_result`). The user's own mail tab is never paged.
+ * Requires an existing signed-in mail tab so we know the provider + account +
+ * have a session.
  */
 async function launchBackgroundScan(): Promise<void> {
-  const existing = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
+  const existing = await chrome.tabs.query({ url: ALL_PROVIDER_MATCH_PATTERNS });
   if (existing.length === 0) {
     await broadcastToPanel({
       kind: 'bg/error',
       message:
-        'No Gmail tab found. Open https://mail.google.com (and sign in), then click Scan now again.',
+        'No mail tab found. Open Gmail (https://mail.google.com) or Outlook (https://outlook.live.com), sign in, then click Scan now again.',
     });
-    await recordTrace({ kind: 'error', message: 'No Gmail tab found for background scan' });
+    await recordTrace({ kind: 'error', message: 'No mail tab found for background scan' });
     return;
   }
-  const srcUrl = existing.find((t) => t.active)?.url ?? existing[0]?.url;
-  const scanUrl = buildInboxUrl(srcUrl);
+  const srcTab = existing.find((t) => t.active) ?? existing[0];
+  const srcUrl = srcTab?.url;
+  const provider = providerFromUrl(srcUrl) ?? 'gmail';
+  const scanUrl = buildInboxUrl(provider, srcUrl);
 
   // Remember which tab to return focus to once the scan finishes.
   const [activeNow] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -125,15 +125,17 @@ async function launchBackgroundScan(): Promise<void> {
 
   let tabId: number | undefined;
   try {
-    // active:true — the tab must be visible/foreground for Gmail to paginate.
+    // active:true — the tab must be visible/foreground for the provider to
+    // paginate (both Gmail's "Older" and OWA's virtualized scroll only run in
+    // a foreground tab; hidden tabs are throttled by Chrome).
     const tab = await chrome.tabs.create({ url: scanUrl, active: true });
     tabId = tab.id;
-    if (tabId === undefined) throw new Error('Could not open a Gmail scan tab');
+    if (tabId === undefined) throw new Error(`Could not open a ${PROVIDER_LABEL[provider]} scan tab`);
     bgScanTabs.set(tabId, refocusTabId);
 
     await waitForTabComplete(tabId, DEFAULTS.bgTabReadyTimeoutMs);
-    // Small settle so Gmail's SPA can build the row DOM; the scanner also
-    // waits for rows itself, so this just trims the first retry.
+    // Small settle so the SPA can build the row DOM; the scanner also waits
+    // for rows itself, so this just trims the first retry.
     await new Promise((r) => setTimeout(r, 1200));
 
     const ok = await sendToTab(tabId, { kind: 'bg/request_scan', source: 'inbox', background: true });
@@ -257,19 +259,19 @@ onMessage(async (msg, sender) => {
         return;
       }
       case 'panel/highlight': {
-        // Forward a highlight request from the panel to the Gmail tab(s).
-        const tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
+        // Forward a highlight request from the panel to every mail tab.
+        const tabs = await chrome.tabs.query({ url: ALL_PROVIDER_MATCH_PATTERNS });
         for (const t of tabs) {
           if (t.id) await sendToTab(t.id, { kind: 'bg/highlight', selector: msg.selector });
         }
         return;
       }
       case 'panel/open_thread': {
-        // Jump to a decision's email: focus the Gmail tab and ask its content
-        // script to navigate to the thread (pagination-proof locator) or, failing
-        // that, highlight the row. If no Gmail tab is open we simply no-op here;
-        // the panel shows its own "Open Gmail to jump here" toast.
-        const tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
+        // Jump to a decision's email: focus the matching mail tab and ask its
+        // content script to navigate to the thread (locator) or, failing that,
+        // highlight the row. If no mail tab is open we simply no-op here; the
+        // panel shows its own "Open <provider> to jump here" toast.
+        const tabs = await chrome.tabs.query({ url: ALL_PROVIDER_MATCH_PATTERNS });
         const target = tabs[0];
         if (target?.id) {
           await chrome.tabs.update(target.id, { active: true });

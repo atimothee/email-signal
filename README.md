@@ -1,10 +1,10 @@
 # EmailSignal
 
-> A Gmail "signal extractor" — runs as a Chrome extension backed by a small local Node sidecar. Reads only what you can see in Gmail. Never deletes or sends mail. Every action passes through an approval card.
+> A Gmail / Outlook "signal extractor" — runs as a Chrome extension backed by a small local Node sidecar. Reads only what you can see in your webmail tab. Never deletes or sends mail. Every action passes through an approval card.
 
-EmailSignal turns a noisy inbox into a short list of **Decisions** — the few things you actually need to act on today, each one synthesized from one *or more* related emails. It is the opposite of a second inbox: it does not restate what Gmail already shows. Two recruiters waiting on you become **one** decision, not two cards. Newsletters, promotions, and notifications never become decisions at all — they flow to a separate Cleanup surface.
+EmailSignal turns a noisy inbox into a short list of **Decisions** — the few things you actually need to act on today, each one synthesized from one *or more* related emails. It is the opposite of a second inbox: it does not restate what Gmail or Outlook already shows. Two recruiters waiting on you become **one** decision, not two cards. Newsletters, promotions, and notifications never become decisions at all — they flow to a separate Cleanup surface.
 
-EmailSignal does **not** use OAuth or the Gmail API. It reads the Gmail web DOM in a content script, so you stay in control of credentials and scope.
+EmailSignal does **not** use OAuth, the Gmail API, or Microsoft Graph. It reads the webmail DOM in a content script (Gmail on `mail.google.com`, Outlook on `outlook.live.com` / `outlook.office.com` / `outlook.office365.com`), so you stay in control of credentials and scope.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ handoffs, and where the infrastructure plugs in lives in **[docs/architecture.md
 
 EmailSignal is split in two:
 
-- **The Chrome extension is a thin client.** It scans the visible Gmail DOM, renders surfaces, and executes approved DOM actions. It runs **no** intelligence and has **no** heuristic fallback.
+- **The Chrome extension is a thin client.** It scans the visible Gmail or Outlook DOM, renders surfaces, and executes approved DOM actions. It runs **no** intelligence and has **no** heuristic fallback.
 - **A local Node sidecar does all the intelligence.** It classifies clutter and synthesizes decisions using the OpenAI Agents SDK, streamed back over SSE.
 
 If the sidecar is unreachable or no OpenAI key is configured, the extension throws a `SidecarError` (`src/agents/llm-runner.ts`), the affected surfaces show an honest error state, and the ambient status indicator goes red. There is **no silent fallback** — the tool tells you when it can't think.
@@ -72,7 +72,7 @@ Two cost optimizations sit around the agents:
 
 EmailSignal reasons about *when* something matters, not just how old the email is — because **recency is not relevance**. An unpaid bill from six weeks ago is *more* urgent with age; a flight booked months ago for tomorrow is critical; but a viewing that already happened, or a resolved overspend alert, is dead.
 
-- The Gmail scanner captures each email's absolute received date (`receivedAt`, from the row's date-cell `title` attribute), and the sidecar anchors every prompt with **"TODAY IS …"** so the model resolves relative dates ("the 15th", "next Tue") against the email's own date, never its training cutoff.
+- The Gmail and Outlook scanners both capture each email's absolute received date (`receivedAt` — from Gmail's date-cell `title` attribute or OWA's row aria-label), and the sidecar anchors every prompt with **"TODAY IS …"** so the model resolves relative dates ("the 15th", "next Tue") against the email's own date, never its training cutoff.
 - The synthesizer tags each decision with a `windowType` — `deadline` (owed until done — escalates as it nears and when overdue), `event` (a moment that passes), or `standing` — and a `resolved` flag set only on explicit in-thread evidence (a later "paid"/"confirmed"/your own reply).
 - Ranking keeps urgency primary but reorders by the **next relevant moment**: due-soon and overdue deadlines rise; a gentle continuous recency tiebreaker separates equals (no hard age cliff).
 - Stale standing items, passed events, and resolved threads are **demoted** — never hidden — into a quiet, collapsed **"Likely past — handled?"** group, with a hedged one-liner ("from about 3 weeks ago — likely already handled"). Money, security, real future deadlines, and high/critical items are exempt from age demotion, because hiding a live item is far worse than surfacing a dead one.
@@ -129,10 +129,10 @@ npm run build:all
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** (top right).
 3. Click **Load unpacked** and select the `dist/` directory.
-4. Pin the EmailSignal icon, open Gmail, and click the icon to open the side panel.
+4. Pin the EmailSignal icon, open Gmail or Outlook, and click the icon to open the side panel.
 5. In **Settings**, confirm the sidecar URL (`http://localhost:3030`) and — if you didn't put it in `server/.env` — paste your **OpenAI API key**. The extension forwards the key to your local sidecar in the request body; it is never sent anywhere except OpenAI.
 
-The extension only has host permissions for `https://mail.google.com/*`. It cannot read or write any other tab.
+The extension only has host permissions for `https://mail.google.com/*`, `https://outlook.live.com/*`, `https://outlook.office.com/*`, and `https://outlook.office365.com/*`. It cannot read or write any other tab.
 
 ### Environment variables (sidecar)
 
@@ -227,8 +227,7 @@ When `WANDB_API_KEY` is set, every suite also logs a **versioned W&B Weave Evalu
 
 ## Limitations
 
-- **Gmail DOM is the only provider.** Outlook lives in [`src/providers/outlook.ts`](src/providers/outlook.ts) as a stub.
-- **No Gmail API / OAuth.** Actions are limited to what's reachable from a visible row selector.
+- **DOM only.** Both providers ([`src/providers/gmail.ts`](src/providers/gmail.ts), [`src/providers/outlook.ts`](src/providers/outlook.ts)) read what you can see in the open mail tab — no Gmail API, no Microsoft Graph, no OAuth. Actions are limited to what's reachable from a visible row selector.
 - **The sidecar is required.** No key / no sidecar → honest error state, never a degraded guess.
 - **Single account at a time**, namespaced by the scraped (hashed) signed-in address.
 
@@ -236,7 +235,6 @@ When `WANDB_API_KEY` is set, every suite also logs a **versioned W&B Weave Evalu
 
 ## Roadmap
 
-- **Outlook DOM provider** — mirror of the Gmail scanner behind the same interface.
 - **Gmail / Microsoft Graph API providers** behind the `EmailProvider` interface, gated by OAuth.
 - **Per-action reversal** via the ledger (undo archive / mark-read).
 
@@ -271,8 +269,10 @@ src/
     service-worker.ts          # MV3 background — owns the message bus
   content/                     # DOM scanner host, action executor, highlighter
   providers/
-    gmail.ts                   # DOM scanner (inbox + deep scroll-scan)
-    outlook.ts                 # stub
+    gmail.ts                   # Gmail DOM scanner (inbox + paginated deep scan)
+    outlook.ts                 # Outlook (OWA) DOM scanner (inbox + virtualized deep scan)
+    identity.ts                # signed-in account scraper (per provider)
+    url-patterns.ts            # provider host patterns + inbox URL builder
     types.ts                   # EmailProvider interface
   common/                      # sender resolution, constants, messaging, log
   memory/                      # interface + json/redis stores
