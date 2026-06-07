@@ -162,6 +162,68 @@ export function WhyShown({ reason }: WhyShownProps): JSX.Element {
   );
 }
 
+interface OverflowMenuProps {
+  /** aria-label / tooltip for the ⋯ trigger. */
+  label?: string;
+  /**
+   * Menu body. Receives a `close()` so an item (e.g. Snooze) can dismiss the
+   * menu after firing. Items that manage their own inline state (CorrectThis)
+   * can ignore it.
+   */
+  children: (close: () => void) => React.ReactNode;
+}
+
+/**
+ * A small `⋯` overflow trigger + popover for low-frequency card actions.
+ * Closes on outside-click and on Escape; keyboard-accessible (real <button>
+ * with aria-haspopup / aria-expanded). Used to keep cards down to one bright
+ * primary action plus a quick dismiss, with the rest one tap away.
+ */
+export function OverflowMenu({ label = 'More actions', children }: OverflowMenuProps): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="overflow-menu" ref={ref}>
+      <button
+        className="ghost overflow-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+          <circle cx="3" cy="8" r="1.4" />
+          <circle cx="8" cy="8" r="1.4" />
+          <circle cx="13" cy="8" r="1.4" />
+        </svg>
+      </button>
+      {open && (
+        <div className="overflow-pop" role="menu">
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface CorrectThisProps {
   onSubmit: (text: string) => void;
   label?: string;

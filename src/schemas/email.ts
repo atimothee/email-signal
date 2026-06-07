@@ -36,6 +36,19 @@ export const EmailCandidateSchema = z.object({
   hasUnsubscribeLink: z.boolean().default(false),
   unsubscribeLinkHrefs: z.array(z.string()).default([]),
   listUnsubscribeHeader: z.string().optional(), // when extractable
+  /**
+   * The single best ACTIONABLE link in the body (payment / "view receipt" /
+   * primary CTA), excluding unsubscribe/footer/social. Null when none found —
+   * inbox rows don't expose the body, so this is usually only set from a thread
+   * view. The Decision's primary button opens this when present.
+   */
+  actionUrl: z.string().nullable().optional(),
+  /**
+   * A Gmail location hash that survives pagination (e.g. "#all/<threadId>"), so
+   * the primary button can reliably open the thread even after the inbox has
+   * scrolled/paginated since the scan. Null when no stable thread id was found.
+   */
+  threadLocator: z.string().nullable().optional(),
   attachmentsCount: z.number().int().min(0).default(0),
   // DOM selectors we can use later to scroll-to / highlight without re-extracting.
   domAnchor: z

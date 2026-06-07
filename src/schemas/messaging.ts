@@ -42,6 +42,11 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('bg/execute_dom_action'), action: ProposedActionSchema }),
   z.object({ kind: z.literal('bg/highlight'), selector: z.string() }),
+  z.object({
+    kind: z.literal('bg/open_thread'),
+    locator: z.string().nullable().optional(),
+    fallbackSelector: z.string().nullable().optional(),
+  }),
 
   // sidepanel <-> background
   z.object({ kind: z.literal('panel/hello') }),
@@ -85,6 +90,17 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
     correction: z.string().min(1).max(800),
   }),
   z.object({ kind: z.literal('panel/highlight'), selector: z.string() }),
+  /**
+   * Open a decision's email in the live Gmail tab: navigate to the thread via a
+   * pagination-proof locator (e.g. "#all/<threadId>"), falling back to a row
+   * highlight. The panel opens an actionUrl itself (window.open) — this message
+   * is only for the thread path. Non-mutating, so no gate.
+   */
+  z.object({
+    kind: z.literal('panel/open_thread'),
+    locator: z.string().nullable().optional(),
+    fallbackSelector: z.string().nullable().optional(),
+  }),
   z.object({ kind: z.literal('panel/kill_switch'), enabled: z.boolean() }),
   z.object({ kind: z.literal('panel/set_dry_run'), enabled: z.boolean() }),
   z.object({ kind: z.literal('panel/save_preference'), preference: UserPreferenceSchema }),
@@ -118,6 +134,9 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
     kind: z.literal('bg/turn_done'),
     ok: z.boolean().default(true),
     decisions: z.number().int().min(0).optional(),
+    // Same trigger taxonomy as turn_started, so the pulse can ignore tiny
+    // action turns (approval/execute) instead of flipping to "done" on each.
+    trigger: z.enum(['scan', 'brief', 'chat', 'approval', 'execute', 'periodic']).optional(),
   }),
   z.object({
     kind: z.literal('bg/decisions'),

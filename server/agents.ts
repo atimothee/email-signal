@@ -260,16 +260,17 @@ THEME GUIDE (pick by what the email is ABOUT, not by a keyword it happens to con
 
 TIME (reason about WHEN — recency is not relevance, so classify the action's time character):
   - windowType:
-      • 'deadline' — something is OWED or DUE BY a date and stays open until it's done. An overdue bill is MORE urgent, not less. (pay a bill, file a form, return a signed doc.)
+      • 'deadline' — something is still OWED or DUE BY a date and stays open until it's done. An overdue bill is MORE urgent, not less. (pay a bill, file a form, return a signed doc.) A RECEIPT, CONFIRMATION, ORDER, or "your trip"/"your ride" record of an ALREADY-CHARGED transaction is NOT a deadline and has NO dueAt — the money already moved, there is nothing to pay. Do not read the transaction/trip date as a due date. Only a still-OPEN, UNPAID obligation gets windowType='deadline' and a dueAt.
       • 'event' — a single moment that simply PASSES: a viewing, flight, call, meeting, RSVP-by-time. Once that moment is past, the action is DEAD.
       • 'standing' — a real action with no date attached.
       • 'none' — no time character / unclear.
   - resolved: set TRUE only on EXPLICIT in-thread evidence the action is already done — a later "paid" / "confirmed" / "thanks, done", or the user's OWN sent reply in the thread. Absence of evidence is NOT resolution; default to false.
   - dueAt: resolve relative dates ('tomorrow', 'next Tue', 'the 15th') against THAT email's receivedAt and TODAY (given in the temporal frame). Emit an ISO date, or null if there is no real deadline.
-  - HEDGE the 'why' when something LOOKS urgent but is OLD or LIKELY ALREADY PAST. Name the tension out loud, e.g. "Sender marked it urgent, but it's from March — likely already past." or "Flagged as your final notice, but the date was last week — probably handled already." Naming that tension is the whole point.
+  - HEDGE the 'why' when something LOOKS urgent but is OLD or LIKELY ALREADY PAST. Name the tension out loud, e.g. "Sender marked it urgent, but it's from March — likely already past." or "Flagged as your final notice, but the date was last week — probably handled already." A 'deadline' whose date is well in the past with no recent follow-up email should be hedged as PROBABLY ALREADY HANDLED, never framed as freshly urgent. Naming that tension is the whole point.
 
 HARD RULES (these are the exact mistakes to avoid):
   - A bank/account/insurance STATEMENT is NOT a payment reminder unless there is a real amount due AND an action to pay by a date. Otherwise theme=admin, low urgency — or omit it.
+  - A RECEIPT / CONFIRMATION / ORDER / trip-or-ride summary for a transaction that was ALREADY CHARGED is NOT an unpaid bill: do NOT emit a dueAt, do NOT set windowType='deadline', and do NOT title it "Pay …". The charge is done. At most it is a low-urgency admin FYI — and usually it should simply be OMITTED.
   - Marketing/cold/bulk mail that opens "Hi {name/city}" does NOT need a reply.
   - Newsletters, promotions, notifications, social updates are NEVER decisions — omit them entirely.
   - Prefer FEW, high-confidence decisions. If nothing genuinely needs the user, return an empty list. NEVER pad.`;
@@ -653,6 +654,16 @@ const URGENCY_RANK: Record<string, number> = { critical: 3, high: 2, normal: 1, 
 const STALE_AGE_DAYS = 21;
 /** A due date within this many days gets a ranking boost (and scaled by nearness). */
 const DUE_SOON_DAYS = 7;
+/**
+ * Overdue grace window (days). A deadline that just passed is MORE urgent; the
+ * overdue boost decays smoothly and crosses ZERO at roughly this many days past
+ * due, then goes negative — so a months-old "overdue" with no recent email sinks
+ * below live items instead of floating to the top. This is the single concept
+ * shared by the overdue score curve AND the long-past-deadline demotion (a
+ * continuous decay, not a hand-tuned cliff per branch). */
+const OVERDUE_GRACE_DAYS = 30;
+/** Peak ranking boost for a just-/recently-overdue obligation (at 0 days past due). */
+const OVERDUE_PEAK_BOOST = 1.2;
 /** Max DEMOTED ("likely past — handled?") decisions we keep, on top of the active cap. */
 const MAX_DEMOTED = 6;
 /** Milliseconds in a day. */
@@ -740,14 +751,35 @@ function hydrateDecisions(
       demoted = true;
       demotedReason = `this was scheduled for ${Math.round(-daysToDue)} day(s) ago`;
     } else if (
+      // LONG-PAST DEADLINE: a deadline whose dueAt is well past the grace window
+      // AND whose newest email is itself stale (no recent follow-up) is almost
+      // always an already-charged receipt the model mis-read as an obligation
+      // (the 8-month-old Uber receipt). Sink it with a hedged reason. A genuine
+      // unpaid bill that's only days overdue stays LIVE (within the grace window),
+      // and one with a RECENT chase email stays live (ageDays small). A still
+      // critically-urgent item is never auto-demoted. Money is NOT exempt here —
+      // a stale receipt with an invented due date must be demotable (#32).
+      windowType === 'deadline' &&
+      daysToDue !== null &&
+      daysToDue < -OVERDUE_GRACE_DAYS &&
+      ageDays > STALE_AGE_DAYS &&
+      urgency !== 'critical' &&
+      theme !== 'security'
+    ) {
+      demoted = true;
+      demotedReason = `was due about ${Math.round(-daysToDue / 7)} week(s) ago — likely already handled`;
+    } else if (
       // STALE: an undated, non-time-critical standing/none item that's gone quiet.
-      // EXEMPT: money/security, any real future due date, deadlines, and
-      // critical/high urgency — those grow MORE urgent (or stay live) with age.
+      // EXEMPT: security, any real future due date, deadlines, and critical/high
+      // urgency — those grow MORE urgent (or stay live) with age. Money is no
+      // longer blanket-exempt (#32): an undated, old, low-urgency money item has
+      // no open obligation signal (no due date, no recent activity), so it may
+      // sink too — a live bill always carries a due date or recent/elevated
+      // urgency and so never reaches this branch.
       !d.dueAt &&
       (windowType === 'standing' || windowType === 'none') &&
       ageDays > STALE_AGE_DAYS &&
       (urgency === 'normal' || urgency === 'low') &&
-      theme !== 'money' &&
       theme !== 'security'
     ) {
       demoted = true;
@@ -763,9 +795,14 @@ function hydrateDecisions(
     if (daysToDue !== null && daysToDue >= 0 && daysToDue <= DUE_SOON_DAYS) {
       score += 1.5 * (1 - daysToDue / DUE_SOON_DAYS);
     }
-    // overdue-deadline boost: an unpaid/overdue obligation is MORE urgent.
+    // overdue-deadline curve: a freshly-overdue obligation is MORE urgent (peak
+    // boost), but the boost decays continuously, crosses ZERO around the grace
+    // window, and goes NEGATIVE as the gap widens — so a months-past "overdue"
+    // ranks BELOW live items instead of getting a flat promotion to the top.
+    // No hard cutoff: a straight line through f(0)=+PEAK, f(GRACE)=0 (#32).
     if (windowType === 'deadline' && daysToDue !== null && daysToDue < 0) {
-      score += 1.0;
+      const overdueDays = -daysToDue;
+      score += OVERDUE_PEAK_BOOST * (1 - overdueDays / OVERDUE_GRACE_DAYS);
     }
     score += (d.confidence ?? 0.7) * 0.1;
     // gentle, continuous recency tiebreaker (no cliff): older items drift down.
@@ -784,6 +821,8 @@ function hydrateDecisions(
       suggestedAction: d.action ?? null,
       confidence: Math.max(0, Math.min(1, d.confidence ?? 0.7)),
       rowSelector: first?.domAnchor.rowSelector ?? null,
+      actionUrl: first?.actionUrl ?? null,
+      threadLocator: first?.threadLocator ?? null,
       windowType,
       resolved,
       receivedAt,

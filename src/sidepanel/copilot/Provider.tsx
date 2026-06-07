@@ -6,7 +6,7 @@ interface Props {
   children: React.ReactNode;
 }
 
-export const ORCHESTRATOR_INSTRUCTIONS = `You are the EmailSignal Orchestrator answering chat in the side panel.
+export const ORCHESTRATOR_INSTRUCTIONS = `You are the Email Signal Orchestrator answering chat in the side panel.
 You NEVER delete, send, forward, or reply to mail. You NEVER act without explicit user approval.
 
 CRITICAL — you have NO ability to act on the inbox directly. The ONLY way anything

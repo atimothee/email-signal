@@ -7,6 +7,7 @@ import { USER_ID } from '@agents/runtime';
 import { getMemoryStore } from '@/memory';
 import { appendLedger, getLedger } from '@/ledger/local-ledger';
 import { recordTrace } from '@/weave/tracing';
+import { registerNotificationClicks } from './notifications';
 import { AccountIdentitySchema } from '@schemas/index';
 import type { ExtMessage } from '@schemas/index';
 
@@ -142,6 +143,9 @@ chrome.runtime.onInstalled.addListener(async () => {
   await chrome.alarms.clear(ALARMS.periodicScan);
 });
 
+// Opt-in scan-completion notifications: clicking one opens the side panel (#1).
+registerNotificationClicks();
+
 onMessage(async (msg, sender) => {
   try {
     switch (msg.kind) {
@@ -236,6 +240,26 @@ onMessage(async (msg, sender) => {
         const tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
         for (const t of tabs) {
           if (t.id) await sendToTab(t.id, { kind: 'bg/highlight', selector: msg.selector });
+        }
+        return;
+      }
+      case 'panel/open_thread': {
+        // Jump to a decision's email: focus the Gmail tab and ask its content
+        // script to navigate to the thread (pagination-proof locator) or, failing
+        // that, highlight the row. If no Gmail tab is open we simply no-op here;
+        // the panel shows its own "Open Gmail to jump here" toast.
+        const tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
+        const target = tabs[0];
+        if (target?.id) {
+          await chrome.tabs.update(target.id, { active: true });
+          if (target.windowId !== undefined) {
+            await chrome.windows.update(target.windowId, { focused: true });
+          }
+          await sendToTab(target.id, {
+            kind: 'bg/open_thread',
+            locator: msg.locator ?? null,
+            fallbackSelector: msg.fallbackSelector ?? null,
+          });
         }
         return;
       }

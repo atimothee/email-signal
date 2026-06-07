@@ -37,6 +37,7 @@ export function SettingsTab(): JSX.Element {
   const [wandbKeySaved, setWandbKeySaved] = useState(false);
   const [wandbProject, setWandbProject] = useState('');
   const [wandbProjectSaved, setWandbProjectSaved] = useState(false);
+  const [notifyEnabled, setNotifyEnabled] = useState(false);
 
   // Load saved server URL + Settings-first config once.
   useEffect(() => {
@@ -48,6 +49,7 @@ export function SettingsTab(): JSX.Element {
         STORAGE_KEYS.model,
         STORAGE_KEYS.wandbApiKey,
         STORAGE_KEYS.wandbProject,
+        STORAGE_KEYS.notifyEnabled,
       ])
       .then((v) => {
         const stored = v[STORAGE_KEYS.serverUrl] as string | undefined;
@@ -60,8 +62,16 @@ export function SettingsTab(): JSX.Element {
         if (wk) setWandbApiKey(wk);
         const wp = v[STORAGE_KEYS.wandbProject] as string | undefined;
         if (wp) setWandbProject(wp);
+        setNotifyEnabled(v[STORAGE_KEYS.notifyEnabled] === true);
       });
   }, []);
+
+  const toggleNotify = async () => {
+    const next = !notifyEnabled;
+    setNotifyEnabled(next);
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    await chrome.storage.local.set({ [STORAGE_KEYS.notifyEnabled]: next });
+  };
 
   const saveApiKey = async (next: string) => {
     if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
@@ -361,6 +371,20 @@ export function SettingsTab(): JSX.Element {
           }}
         >
           {killSwitch ? 'ENABLED' : 'OFF'}
+        </button>
+      </div>
+
+      <div className="settings-row">
+        <div>
+          <div className="label">Notifications</div>
+          <div className="hint">
+            When ON, a finished scan can nudge you with a Chrome notification — when
+            something high-priority needs you, or a batch of senders is ready to clean up.
+            Clicking it opens the side panel. Off by default; the kill switch silences these too.
+          </div>
+        </div>
+        <button className={notifyEnabled ? 'success' : 'ghost'} onClick={toggleNotify}>
+          {notifyEnabled ? 'ON' : 'OFF'}
         </button>
       </div>
 

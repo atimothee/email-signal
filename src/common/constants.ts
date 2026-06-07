@@ -1,4 +1,5 @@
-export const APP_NAME = 'EmailSignal';
+/** Front-facing product name (issue #12). Internal log prefixes stay [EmailSignal]. */
+export const APP_NAME = 'Email Signal';
 export const STORAGE_KEYS = {
   // NOTE: user preferences live in the memory store (es.mem.prefs, keyed by
   // userId) — see src/memory/json-store.ts. The old flat 'es.preferences.v1'
@@ -14,12 +15,18 @@ export const STORAGE_KEYS = {
   traceEvents: 'es.trace.v1',
   serverUrl: 'es.server.url.v1',
   account: 'es.account.v1',
+  /** Opt-in: fire Chrome notifications when a scan surfaces something. Default off. */
+  notifyEnabled: 'es.notify.enabled.v1',
+  /** Dedup state so identical results don't re-notify (last signatures + brief date). */
+  notifyState: 'es.notify.state.v1',
 } as const;
 
 export const DEFAULTS = {
   dryRun: true,
   killSwitch: false,
   notifyIntervalMin: 30,
+  /** Min senders queued before an "unsubscribe batch ready" notification fires. */
+  notifyUnsubBatchMin: 5,
   maxCandidatesPerScan: 100,
   bodyExcerptChars: 512,
   approvalExpiryMs: 1000 * 60 * 30, // 30 minutes

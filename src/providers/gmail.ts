@@ -75,6 +75,39 @@ function findUnsubscribeLinks(scope: ParentNode): string[] {
     .slice(0, 5);
 }
 
+const ACTION_EXCLUDE =
+  /unsubscribe|opt[\s-]?out|email preferences|update preferences|manage (your )?(preferences|subscription)|privacy|terms|view (this )?(email )?(in|online|browser)|facebook|twitter|instagram|linked\s?in|youtube|tiktok|app\s?store|google\s?play/i;
+const ACTION_PREFER =
+  /\b(pay|view (your )?(receipt|invoice|order|booking|statement|details)|confirm|review|track(ing)?|download|complete|get started|sign in|log ?in|rsvp|approve|verify|reset|finish|continue|open)\b/i;
+
+/**
+ * The single best ACTIONABLE link in an email body — a payment / "view receipt"
+ * / primary CTA — excluding the unsubscribe set, footer/legal, social, and
+ * store-badge links. Conservative: returns null unless a link scores positively,
+ * so we never open a random footer link. Only meaningful where the body is
+ * available (thread view); inbox rows have no body to scan.
+ */
+function findPrimaryActionLink(scope: ParentNode, unsubscribe: string[]): string | null {
+  const unsubSet = new Set(unsubscribe);
+  const scored = Array.from(scope.querySelectorAll('a'))
+    .filter((a) => /^https?:\/\//.test(a.href) && !unsubSet.has(a.href))
+    .map((a) => {
+      const text = (a.textContent ?? '').trim();
+      const cls = typeof a.className === 'string' ? a.className : '';
+      if (ACTION_EXCLUDE.test(text) || ACTION_EXCLUDE.test(a.href)) return null;
+      let score = 0;
+      if (ACTION_PREFER.test(text)) score += 3;
+      if (/btn|button|cta|action/i.test(cls)) score += 2;
+      if (text.length > 0 && text.length <= 40) score += 1;
+      if (text.length === 0) score -= 2; // bare image/tracking anchors
+      return { href: a.href, score };
+    })
+    .filter((x): x is { href: string; score: number } => x !== null)
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  return best && best.score > 0 ? best.href : null;
+}
+
 function buildRowSelector(row: HTMLElement, index: number): string {
   // Build a positional selector we can re-resolve later. Gmail's row order
   // shifts when new mail arrives, so we also store the messageId.
@@ -97,8 +130,13 @@ function extractRow(row: HTMLElement, idx: number, warnings: string[]): EmailCan
       row.getAttribute('data-legacy-message-id') ??
       row.getAttribute('data-legacy-thread-id') ??
       hash(`${from.email}|${subject}|${snippet}`);
-    const threadAttr = row.getAttribute('data-legacy-thread-id') ?? idAttr;
+    const realThreadId = row.getAttribute('data-legacy-thread-id');
+    const threadAttr = realThreadId ?? idAttr;
     const unsubLinks = findUnsubscribeLinks(row);
+    // Pagination-proof locator: Gmail navigates to a conversation when the URL
+    // hash is "#all/<threadId>", regardless of which inbox page is showing. Only
+    // build it from a REAL Gmail thread id (not our hash fallback).
+    const threadLocator = realThreadId ? `#all/${realThreadId}` : null;
     return EmailCandidateSchema.parse({
       id: idAttr,
       threadId: threadAttr,
@@ -111,6 +149,8 @@ function extractRow(row: HTMLElement, idx: number, warnings: string[]): EmailCan
       isStarred,
       hasUnsubscribeLink: unsubLinks.length > 0,
       unsubscribeLinkHrefs: unsubLinks,
+      // Inbox rows expose no body, so actionUrl stays null here (set in threads).
+      ...(threadLocator ? { threadLocator } : {}),
       domAnchor: { rowSelector: buildRowSelector(row, idx) },
       // Leave unset (not null) when unparseable so the schema's optional default
       // applies; missing receivedAt is treated as RECENT downstream.
@@ -344,12 +384,36 @@ function readOpenThread(warnings: string[]): EmailCandidate[] {
         const bodyEl = msg.querySelector('.a3s');
         const bodyText = (bodyEl?.textContent ?? '').trim().slice(0, DEFAULTS.bodyExcerptChars);
         const unsubLinks = findUnsubscribeLinks(msg);
+        // Body is available here, so we can pick the best actionable link.
+        const actionUrl = findPrimaryActionLink(bodyEl ?? msg, unsubLinks);
+        // The open thread IS the current Gmail view — its hash reliably reopens it.
+        const threadLocator = location.hash || null;
         // Per-message header date span exposes a full absolute date in its
         // title. Best-effort: any span[title] inside the message header whose
         // title parses as a date; leave unset otherwise.
         const receivedAt = parseTitleDate(
           msg.querySelector(DATE_SELECTOR) ?? msg.querySelector('.g3 span[title], span.g3[title]')
         );
+        // Best-effort stable locator so Mute's mark_read has something to target
+        // for senders scanned from an OPEN THREAD (#41). Inbox rows get one via
+        // buildRowSelector; thread messages only do when they expose a stable id.
+        // When none exists we WARN and leave domAnchor unset rather than fabricate
+        // a fragile selector — the mark_read handler fails honestly (and the Mute
+        // confirmation reports the real count) instead of silently no-opping.
+        const threadRowSelector = (() => {
+          const dmid = msg.getAttribute('data-message-id');
+          if (dmid) return `[data-message-id="${CSS.escape(dmid)}"]`;
+          const lmid = msg.getAttribute('data-legacy-message-id');
+          if (lmid) return `[data-legacy-message-id="${CSS.escape(lmid)}"]`;
+          const id = msg.getAttribute('id');
+          if (id) return `#${CSS.escape(id)}`;
+          return null;
+        })();
+        if (!threadRowSelector) {
+          warnings.push(
+            `thread msg ${idx}: no stable selector — mark-read unavailable for this sender in thread view`
+          );
+        }
         return EmailCandidateSchema.parse({
           id: hash(`${from.email}|${subject}|${idx}|${bodyText.slice(0, 64)}`),
           threadId: hash(subject),
@@ -360,7 +424,10 @@ function readOpenThread(warnings: string[]): EmailCandidate[] {
           bodyExcerpt: bodyText,
           hasUnsubscribeLink: unsubLinks.length > 0,
           unsubscribeLinkHrefs: unsubLinks,
+          ...(actionUrl ? { actionUrl } : {}),
+          ...(threadLocator ? { threadLocator } : {}),
           ...(receivedAt ? { receivedAt } : {}),
+          ...(threadRowSelector ? { domAnchor: { rowSelector: threadRowSelector } } : {}),
         });
       } catch (err) {
         warnings.push(`thread msg ${idx}: ${(err as Error).message}`);

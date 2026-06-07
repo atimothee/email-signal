@@ -1,35 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Email Signal extension icon — the "Ambient Pulse" miniaturized.
-  A single glowing cobalt dot with one soft ring, centered on a dark
-  rounded-square tile. No envelope, no @, no letter-mark, one accent only.
+  A single luminous pulse (bright core + soft ring) centered on a
+  PREDOMINANTLY BLUE rounded-square tile. No envelope, no @, no
+  letter-mark. One concept: a single signal surfaced from the noise.
+
+  Palette (issue #18): the tile is a blue→deep-navy radial — black is gone,
+  replaced by desaturated navy so the mark reads unmistakably blue at a
+  glance and holds shape on both light and dark toolbars. The signal itself
+  is a bright blue-white core so the pulse pops against the blue field.
 
   Reference master is 64x64. All values are proportional to that grid:
-    tile bg        #0a0e1a
-    corner radius  14  (~22%)
-    dot diameter   14  (~22%, r=7) color #4d9eff
-    glow blur      ~3.8 (~6%) color rgba(77,158,255,0.20)
-    ring color     #7ab6ff @ 60% opacity
-    ring stroke    1.5
-    ring diameter  ~33 (~52%, r=16.6)
+    tile        radial #2a72d8 (center) → #082photo... see <radialGradient>
+    corner      14  (~22%)
+    glow halo   rgba(173,210,255,0.40), blurred (~6%)
+    ring        #d4e6ff @ 78%, stroke 1.6, r=16.6 (~52%)
+    core dot    #f2f7ff, r=7 (~22%)
   Center of dot + ring: (32, 32).
 -->
 <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <radialGradient id="tile" cx="50%" cy="42%" r="72%">
+      <stop offset="0%" stop-color="#2f78de"/>
+      <stop offset="55%" stop-color="#1b56b4"/>
+      <stop offset="100%" stop-color="#0a2f6b"/>
+    </radialGradient>
     <filter id="glow" x="-100%" y="-100%" width="300%" height="300%" color-interpolation-filters="sRGB">
       <feGaussianBlur in="SourceGraphic" stdDeviation="3.8"/>
     </filter>
   </defs>
 
-  <!-- Tile -->
-  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="#0a0e1a"/>
+  <!-- Tile: blue-dominant, no black -->
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="url(#tile)"/>
 
-  <!-- Soft glow halo behind the dot (accent-soft) -->
-  <circle cx="32" cy="32" r="7" fill="rgba(77,158,255,0.20)" filter="url(#glow)"/>
+  <!-- Soft luminous halo behind the core -->
+  <circle cx="32" cy="32" r="8" fill="rgba(173,210,255,0.40)" filter="url(#glow)"/>
 
-  <!-- One soft ring (accent-strong @ 60%) -->
-  <circle cx="32" cy="32" r="16.6" fill="none" stroke="#7ab6ff" stroke-opacity="0.6" stroke-width="1.5"/>
+  <!-- One soft ring (light blue, reads as liveness) -->
+  <circle cx="32" cy="32" r="16.6" fill="none" stroke="#d4e6ff" stroke-opacity="0.78" stroke-width="1.6"/>
 
-  <!-- Glowing accent dot (flat accent, glow does the work) -->
-  <circle cx="32" cy="32" r="7" fill="#4d9eff"/>
+  <!-- The signal: a bright blue-white core that pops on the blue field -->
+  <circle cx="32" cy="32" r="7" fill="#f2f7ff"/>
 </svg>

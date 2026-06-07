@@ -16,6 +16,7 @@ import { checkPolicy } from './policy';
 import { getMemoryStore } from '@/memory';
 import { isDryRun, isKillSwitchOn, USER_ID } from './runtime';
 import { recordProposed, appendLedger, getLedger } from '@/ledger/local-ledger';
+import { notifyScanResults } from '@/background/notifications';
 import { initWeave, recordTrace, startSession, getSessionId } from '@/weave/tracing';
 import { AGENT_NAMES, AGENT_REGISTRY, AgentName } from './agent-defs';
 import {
@@ -113,7 +114,7 @@ export async function runOrchestratorTurn(input: OrchestratorTurnInput): Promise
       elapsedMs: Date.now() - started,
     });
     if (input.trigger !== 'periodic') {
-      await broadcast({ kind: 'bg/turn_done', ok });
+      await broadcast({ kind: 'bg/turn_done', ok, trigger: input.trigger });
     }
   }
 }
@@ -203,6 +204,10 @@ async function handleScan(scan: ScanResult, ctx: AgentContext): Promise<void> {
     };
     await proposeAndGate(partial, ctx);
   }
+
+  // 5) Opt-in scan-completion notifications (off by default; respects the kill
+  //    switch). Never throws — a notification failure must not affect the scan.
+  await notifyScanResults(filtered, groups);
 }
 
 // ---------------- Brief turn ----------------
