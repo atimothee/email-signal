@@ -144,7 +144,9 @@ The extension only has host permissions for `https://mail.google.com/*`. It cann
 | `EMAIL_SIGNAL_PORT` | `3030` | Sidecar listen port. |
 | `EMAIL_SIGNAL_MODEL` | `gpt-4.1-mini` | Model for both agents. Settings-first. |
 | `EMAIL_SIGNAL_BATCH_SIZE` | `25` | Candidates per parallel classifier call. |
-| `REDIS_URL` | — | Enables the classify cache + cross-device preferences. Falls back to a local JSON store (`.data/memory.json`). |
+| `REDIS_URL` | — | Enables the classify cache + cross-device preferences + the Context Retriever vector index. For the vector index / semantic recall it MUST point at **Redis Stack or Redis 8+** (bundles the search module); a plain Redis degrades those to a no-op. Falls back to a local JSON store when unset. |
+| `AGENT_MEMORY_URL` | — | [Agent Memory Server](https://github.com/redis/agent-memory-server) base URL (server-deployment concern, env-only). Adds two-tier working + long-term memory with semantic recall/dedup/topic extraction. Unset → the hand-rolled `MemoryStore` stays source-of-truth (byte-identical to pre-Iris). `docker compose up` provisions it. |
+| `EMAIL_SIGNAL_CONTEXT_K` | `5` | Context Retriever: prior decisions injected into synthesis (`0` disables retrieval). Server tuning knob (env-only). |
 | `WANDB_API_KEY` | — | Enables W&B Weave tracing. Settings-first. Without it, tracing is a silent pass-through. |
 | `WANDB_PROJECT` | `email-signal` | Weave project name. Settings-first. |
 | `EMAIL_SIGNAL_SEND_FULL_BODIES` | `false` | When false, only ~512-char snippets reach the model. |
@@ -158,6 +160,8 @@ The extension only has host permissions for `https://mail.google.com/*`. It cann
 | `GET /health` | Liveness + whether an OpenAI/Weave key is configured. |
 | `POST /orchestrate/classify` | SSE — emits `classification` (clutter) then `decisions`. |
 | `POST /orchestrate/chat` | SSE — emits `chat_reply`. |
+| `POST /memory/recall` | Semantic memory recall — embeds `q`, KNN over the account's memory vectors + Agent Memory long-term, returns `MemoryRecord[]`. `ok:false` ⇒ caller falls back to its substring filter. |
+| `POST /memory/index` | Embed + index a `MemoryRecord` (and route it to Agent Memory long-term when enabled). Best-effort. |
 | `ALL /copilotkit` | CopilotKit runtime for the generative-UI chat. |
 
 ---

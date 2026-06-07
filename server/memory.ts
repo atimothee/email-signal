@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { createHash } from 'node:crypto';
-import type { UserPreference } from '../src/schemas/index.js';
+import type { UserPreference, MemoryRecord } from '../src/schemas/index.js';
+import { createLongTerm } from './agent-memory.js';
 
 /**
  * Server-side Agent Memory (Redis-backed).
@@ -73,6 +74,29 @@ function prefIdentity(p: UserPreference): string {
 }
 
 /**
+ * Map a preference to a long-term MemoryRecord so the Agent Memory Server can
+ * give it semantic recall + dedup + topic/entity extraction. Only DERIVED text
+ * (the kind, the user-chosen key, and the value the user themselves set) is
+ * carried — never raw email content. Approved memory SUGGESTIONS arrive here too
+ * (they're persisted as `custom`/`agent_suggested_then_approved` preferences), so
+ * this one mapping covers both "preferences → long-term" and "approved
+ * propose_memory → long-term".
+ */
+function prefToMemoryRecord(p: UserPreference): MemoryRecord {
+  const valueText = Array.isArray(p.value) ? p.value.join(', ') : String(p.value);
+  return {
+    id: p.id,
+    kind: 'preference',
+    summary: `User preference [${p.kind}]: ${p.key} = ${valueText}`.slice(0, 400),
+    details: {},
+    confidence: 1,
+    createdAt: p.createdAt,
+    source: p.source === 'user_settings' ? 'user' : 'agent_suggested',
+    approvedByUser: true,
+  };
+}
+
+/**
  * Mirror the client's preferences into Redis and return the authoritative set.
  *
  * The extension's chrome.storage is the source of truth and forwards its FULL
@@ -111,6 +135,17 @@ export async function reconcilePreferences(
   } catch {
     /* best-effort mirror; client snapshot is still authoritative */
   }
+
+  // Additionally reflect preferences into the Agent Memory long-term store so
+  // they gain semantic recall + dedup (#37). The Redis hash above stays the
+  // AUTHORITATIVE mirror that `formatPreferencesForSynthesis` reads; this copy is
+  // purely additive. Best-effort + no-op when AGENT_MEMORY_URL is unset, so
+  // synthesis behavior is byte-identical when Agent Memory is disabled.
+  await Promise.all(
+    clientPrefs.map((p) => createLongTerm(account, prefToMemoryRecord(p)))
+  ).catch(() => {
+    /* Agent Memory is best-effort; the hash mirror remains source of truth */
+  });
 
   return clientPrefs;
 }

@@ -19,10 +19,23 @@ import {
   DecisionSchema,
   EmailCandidateSchema,
   UserPreferenceSchema,
+  MemoryRecordSchema,
+  type MemoryRecord,
 } from '../src/schemas/index.js';
 import { runAgentClassification, runAgentChat, initServerWeave, weaveDashboardUrl, recordFeedback } from './agents.js';
 import { cacheStatus, initCache } from './cache.js';
-import { initVectorIndex, vectorIndexStatus } from './vector-index.js';
+import {
+  initVectorIndex,
+  vectorIndexStatus,
+  searchMemories,
+  upsertMemoryVector,
+} from './vector-index.js';
+import { embedTexts } from './embeddings.js';
+import {
+  agentMemoryStatus,
+  createLongTerm,
+  searchLongTerm,
+} from './agent-memory.js';
 import type { SseWriter } from './trace-bridge.js';
 
 const PORT = Number(process.env['EMAIL_SIGNAL_PORT'] ?? 3030);
@@ -55,6 +68,7 @@ app.get('/health', (c) =>
     model: resolveConfig().model,
     cache: cacheStatus(),
     vectorIndex: vectorIndexStatus(),
+    agentMemory: agentMemoryStatus(),
   })
 );
 
@@ -212,6 +226,140 @@ app.post('/orchestrate/chat', async (c) => {
       await writer.send('done', { ok: false });
     }
   });
+});
+
+// ---- Memory: semantic vector index (Context Retriever for MemoryRecords) ----
+// The server owns embeddings (OpenAI key) so semantic recall must live here, not
+// in the extension service worker. Both routes are best-effort: with the vector
+// index disabled they no-op and the caller (RedisMemoryStore) falls back to its
+// substring filter. Privacy: only the derived `summary`/`kind` are embedded and
+// stored — never raw email bodies. Account isolation is enforced by the index's
+// per-account TAG filter (the `account` field below is the caller's user/account id).
+
+/** Reconstruct a best-effort MemoryRecord from the index's stored derived fields. */
+function reconstructMemoryRecord(hit: {
+  id: string;
+  summary: string;
+  kind: string;
+  createdAt: string;
+}): MemoryRecord | null {
+  const KINDS = ['preference', 'interaction_pattern', 'fact', 'topic_interest'] as const;
+  const kind = (KINDS as readonly string[]).includes(hit.kind)
+    ? (hit.kind as MemoryRecord['kind'])
+    : 'fact';
+  const createdAt = /\d{4}-\d{2}-\d{2}T/.test(hit.createdAt)
+    ? hit.createdAt
+    : new Date().toISOString();
+  const parsed = MemoryRecordSchema.safeParse({
+    id: hit.id,
+    kind,
+    summary: hit.summary,
+    details: {},
+    confidence: 1,
+    createdAt,
+    source: 'system',
+    approvedByUser: true,
+  });
+  return parsed.success ? parsed.data : null;
+}
+
+const MemoryIndexBody = z.object({
+  /** Caller's account/user id — namespaces the vector index (hashed before use). */
+  account: z.string().optional(),
+  record: MemoryRecordSchema,
+  apiKey: z.string().optional(),
+  settings: SettingsSchema.optional(),
+});
+
+// Embed a record's summary and upsert its vector so it's semantically
+// searchable. Best-effort: 200 even when the index is disabled (the upsert is a
+// no-op) so the caller's append never fails on this.
+app.post('/memory/index', async (c) => {
+  const json = await c.req.json().catch(() => null);
+  const parsed = MemoryIndexBody.safeParse(json);
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const { account, record, apiKey, settings } = parsed.data;
+  const key = effectiveSettings(settings, apiKey).apiKey;
+  try {
+    const [vec] = await embedTexts([record.summary], key);
+    if (vec) {
+      await upsertMemoryVector(
+        account,
+        { id: record.id, summary: record.summary, kind: record.kind, createdAt: record.createdAt },
+        vec
+      );
+    }
+    // Route the approved record into the Agent Memory long-term store too (#37)
+    // so it gains server-side dedup + topic/entity extraction. No-op when
+    // AGENT_MEMORY_URL is unset; the vector index above is the local path.
+    await createLongTerm(account, record);
+    return c.json({ ok: true });
+  } catch (err) {
+    // Never fail the caller's append because indexing degraded.
+    return c.json({ ok: false, error: (err as Error).message });
+  }
+});
+
+const MemoryRecallBody = z.object({
+  account: z.string().optional(),
+  kind: z.string().optional(),
+  q: z.string().optional(),
+  k: z.number().int().min(1).max(50).optional(),
+  apiKey: z.string().optional(),
+  settings: SettingsSchema.optional(),
+});
+
+// Semantic recall: embed `q`, KNN over the account's memory vectors, return
+// reconstructed MemoryRecord[]. On any failure (or no `q`) returns
+// { ok:false } / [] so the caller falls back to its substring path. With no `q`
+// there is nothing to embed — the substring/recent path on the client handles it.
+app.post('/memory/recall', async (c) => {
+  const json = await c.req.json().catch(() => null);
+  const parsed = MemoryRecallBody.safeParse(json);
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const { account, kind, q, k = 10, apiKey, settings } = parsed.data;
+  if (!q?.trim()) return c.json({ ok: true, records: [] });
+
+  // Two semantic backends, either of which may be enabled: the local RediSearch
+  // vector index (#35) and the Agent Memory long-term store (#37). When BOTH are
+  // disabled, signal the caller to use its substring fallback (`ok:false`) and
+  // make NO embedding call.
+  const vstatus = vectorIndexStatus().status;
+  const vectorEnabled = vstatus !== 'disabled' && vstatus !== 'error';
+  const agentEnabled = agentMemoryStatus().status !== 'disabled';
+  if (!vectorEnabled && !agentEnabled) {
+    return c.json({ ok: false, disabled: true, records: [] });
+  }
+
+  const key = effectiveSettings(settings, apiKey).apiKey;
+  try {
+    const merged: MemoryRecord[] = [];
+    const seen = new Set<string>();
+    const add = (r: MemoryRecord | null) => {
+      if (!r) return;
+      const dedupKey = `${r.id}|${r.summary.toLowerCase()}`;
+      if (seen.has(dedupKey)) return;
+      seen.add(dedupKey);
+      merged.push(r);
+    };
+
+    // Agent Memory long-term takes the raw query string (it embeds server-side).
+    if (agentEnabled) {
+      const lt = await searchLongTerm(account, q, { limit: k, kind });
+      for (const r of lt) add(r);
+    }
+    // Local vector index needs the query embedded here.
+    if (vectorEnabled) {
+      const [vec] = await embedTexts([q], key);
+      if (vec) {
+        const hits = await searchMemories(account, vec, k, kind);
+        for (const h of hits) add(reconstructMemoryRecord(h));
+      }
+    }
+    return c.json({ ok: true, records: merged.slice(0, k) });
+  } catch (err) {
+    return c.json({ ok: false, error: (err as Error).message, records: [] });
+  }
 });
 
 // ---- CopilotKit runtime ----

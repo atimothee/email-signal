@@ -1,0 +1,31 @@
+# OSS stand-in for managed Redis Iris: Redis Stack + the Redis Agent Memory Server,
+# both pointed at the same Redis instance. The sidecar reaches the memory server's
+# REST API at http://localhost:8000 (set AGENT_MEMORY_URL to that to enable memory).
+#
+# Bring it up with:  OPENAI_API_KEY=sk-... docker compose up
+services:
+  redis:
+    # redis-stack bundles RediSearch, which the agent-memory-server uses for the
+    # vector / semantic memory index. Plain redis:7 would NOT be enough.
+    image: redis/redis-stack:latest
+    ports:
+      - '6379:6379' # Redis protocol
+      - '8001:8001' # RedisInsight UI (optional, handy for inspecting memories)
+    volumes:
+      - redis-data:/data
+
+  agent-memory-server:
+    # https://github.com/redis/agent-memory-server — verified image name + REST port.
+    image: ghcr.io/redis/agent-memory-server:latest
+    environment:
+      REDIS_URL: redis://redis:6379
+      # The server generates embeddings for semantic long-term memory, so it needs
+      # an OpenAI key. Passed through from the host env (never baked into the image).
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - '8000:8000' # REST API (default port) — point AGENT_MEMORY_URL here
+    depends_on:
+      - redis
+
+volumes:
+  redis-data:

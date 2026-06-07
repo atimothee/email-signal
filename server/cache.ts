@@ -116,7 +116,8 @@ export function fingerprintPreferences(prefs: UserPreference[] | undefined): str
 export function classifyCacheKey(
   account: string | undefined,
   candidates: EmailCandidate[],
-  prefs?: UserPreference[]
+  prefs?: UserPreference[],
+  contextFingerprint?: string
 ): string {
   const accountHash = account?.trim()
     ? sha256(account.trim().toLowerCase()).slice(0, 16)
@@ -124,7 +125,21 @@ export function classifyCacheKey(
   const ids = candidates.map((c) => c.id).sort();
   const idsHash = sha256(ids.join('\n')).slice(0, 40);
   const prefHash = fingerprintPreferences(prefs);
-  return `es:classify:${CACHE_VERSION}:${MODEL}:${accountHash}:${idsHash}:${prefHash}`;
+  // Retrieved prior-decision context changes synthesis output, so it's part of
+  // the cache identity — exactly like preferences. Defaults to 'none' so a
+  // deployment without the vector index produces byte-identical keys to before.
+  const ctx = contextFingerprint?.trim() || 'none';
+  return `es:classify:${CACHE_VERSION}:${MODEL}:${accountHash}:${idsHash}:${prefHash}:${ctx}`;
+}
+
+/**
+ * Stable fingerprint of the retrieved prior-decision ids that get injected into
+ * synthesis. Sorted so order never matters; 'none' when retrieval is empty or
+ * disabled (keeping the cache key identical to the pre-Context-Retriever key).
+ */
+export function fingerprintContext(decisionIds: string[] | undefined): string {
+  if (!decisionIds || decisionIds.length === 0) return 'none';
+  return sha256([...decisionIds].sort().join('|')).slice(0, 16);
 }
 
 /** Returns the cached result for `key`, or null on miss / disabled / error. */

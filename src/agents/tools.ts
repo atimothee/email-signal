@@ -8,7 +8,40 @@ import {
 } from '@schemas/index';
 import { getMemoryStore } from '@/memory';
 import { getLedger } from '@/ledger/local-ledger';
+import { getServerBase } from '@/common/server-client';
 import { USER_ID } from './runtime';
+
+/**
+ * Try the sidecar's semantic recall first (Context Retriever vector index +
+ * Agent Memory long-term, #35/#37). Returns null on any failure or when both
+ * server backends are disabled (`ok:false`) so the caller falls back to the
+ * local MemoryStore (semantic-Redis or substring). Best-effort — never throws.
+ */
+async function recallViaSidecar(args: {
+  kind?: string;
+  q?: string;
+}): Promise<MemoryRecordType[] | null> {
+  if (!args.q?.trim()) return null; // no query → nothing semantic to do
+  try {
+    const base = await getServerBase();
+    const res = await fetch(`${base}/memory/recall`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account: USER_ID, kind: args.kind, q: args.q, k: 10 }),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { ok?: boolean; records?: unknown[] };
+    if (!json.ok || !Array.isArray(json.records)) return null;
+    return json.records
+      .map((r) => MemoryRecordSchema.safeParse(r))
+      .filter((p): p is { success: true; data: MemoryRecordType } => p.success)
+      .map((p) => p.data);
+  } catch {
+    return null;
+  }
+}
+
+type MemoryRecordType = import('@schemas/index').MemoryRecord;
 
 /**
  * Tools are framework-agnostic descriptors. The orchestrator converts them
@@ -40,14 +73,14 @@ export const ToolSchemas = {
   },
   recall_memory: {
     parameters: z.object({ kind: z.string().optional(), q: z.string().optional() }),
-    description: 'Recall memory records relevant to a kind/keyword.',
+    description: 'Recall memory records relevant to a kind/keyword (semantic when available).',
     async execute(args: { kind?: string; q?: string }) {
+      // Prefer server-side semantic recall (vector index + Agent Memory); fall
+      // back to the local store (which itself does semantic-Redis or substring).
+      const viaSidecar = await recallViaSidecar(args);
+      if (viaSidecar) return viaSidecar;
       const store = await getMemoryStore();
-      const records = await store.recallMemories(USER_ID, {
-        kind: args.kind as any,
-        q: args.q,
-      });
-      return records;
+      return store.recallMemories(USER_ID, { kind: args.kind as any, q: args.q });
     },
   },
   propose_memory: {

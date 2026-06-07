@@ -31,9 +31,18 @@ export interface DedupResult {
   merged: DecisionOut[];
   /** false when embeddings were unavailable — caller should use its fallback. */
   clustered: boolean;
+  /**
+   * text→vector map of every draft we embedded, keyed by `embedText(draft)`.
+   * Threaded out so the caller (the synthesis pipeline) can persist the final
+   * decisions to the Context Retriever index WITHOUT a second embedding call.
+   * Present only when `clustered` (i.e. embeddings succeeded). The merged reps'
+   * titles/whys are a subset of these keys, so lookups hit.
+   */
+  vectorsByText?: Map<string, number[]>;
 }
 
-function embedText(d: DecisionOut): string {
+/** Stable key for the (title, why) we embed — shared with the index write path. */
+export function embedText(d: { title: string; why: string }): string {
   return `${d.title}\n${d.why}`;
 }
 
@@ -108,5 +117,10 @@ export async function dedupDecisions(
         (URGENCY_RANK[b.urgency]! - URGENCY_RANK[a.urgency]!) || b.confidence - a.confidence
     );
 
-  return { merged, clustered: true };
+  // Expose the draft vectors keyed by their embed text so the caller can index
+  // the final decisions without re-embedding (every merged rep's text is a key).
+  const vectorsByText = new Map<string, number[]>();
+  for (let i = 0; i < drafts.length; i++) vectorsByText.set(embedText(drafts[i]!), vectors[i]!);
+
+  return { merged, clustered: true, vectorsByText };
 }
