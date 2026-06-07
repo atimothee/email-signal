@@ -16,6 +16,9 @@ import { log } from '@/common/log';
  */
 
 const ROW_SELECTOR = 'tr.zA'; // inbox rows
+// Gmail's "Older" page-navigation arrow (next page of results). There can be
+// more than one in the DOM; we pick the first enabled, visible one.
+const OLDER_BUTTON_SELECTOR = '[aria-label="Older"], [data-tooltip="Older"]';
 const SUBJECT_SELECTOR = '.bog, .y6 span'; // subject text in rows
 const SENDER_SELECTOR = '.yW span[email], .yW span';
 const SNIPPET_SELECTOR = '.y2';
@@ -129,34 +132,102 @@ export async function scanGmailDom(
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Find the nearest scrollable ancestor that actually scrolls the inbox list. */
-function findScrollContainer(el: HTMLElement): HTMLElement | null {
-  let node: HTMLElement | null = el.parentElement;
-  while (node && node !== document.body) {
-    const style = getComputedStyle(node);
-    const scrollable = /(auto|scroll)/.test(style.overflowY);
-    if (scrollable && node.scrollHeight > node.clientHeight + 40) return node;
-    node = node.parentElement;
+/**
+ * Dispatch a full mouse-event sequence. Gmail's toolbar controls are wired via
+ * its `jsaction` framework, which reacts to mousedown/mouseup — a bare
+ * element.click() (which only fires a synthetic `click`) is ignored.
+ */
+function realClick(el: HTMLElement): void {
+  const opts: MouseEventInit = { bubbles: true, cancelable: true, view: window };
+  el.dispatchEvent(new MouseEvent('mouseover', opts));
+  el.dispatchEvent(new MouseEvent('mousedown', opts));
+  el.dispatchEvent(new MouseEvent('mouseup', opts));
+  el.dispatchEvent(new MouseEvent('click', opts));
+}
+
+/** First enabled, on-screen "Older" page button, or null if none/disabled. */
+function findOlderButton(): HTMLElement | null {
+  const candidates = Array.from(
+    document.querySelectorAll(OLDER_BUTTON_SELECTOR)
+  ) as HTMLElement[];
+  for (const el of candidates) {
+    if (el.getAttribute('aria-disabled') === 'true') continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue; // not rendered
+    return el;
   }
-  return (document.scrollingElement as HTMLElement) ?? null;
+  return null;
+}
+
+/** Heuristic: Gmail is showing a rate-limit / unusual-activity interstitial. */
+function looksRateLimited(): boolean {
+  const text = (document.body?.innerText ?? '').slice(0, 4000).toLowerCase();
+  return (
+    text.includes('unusual activity') ||
+    text.includes("we're sorry") ||
+    text.includes('temporarily unable') ||
+    text.includes('exceeded') && text.includes('limit')
+  );
+}
+
+/** Wait until inbox rows exist (Gmail builds its DOM async after load). */
+async function waitForRows(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (document.querySelector(ROW_SELECTOR)) return true;
+    await sleep(150);
+  }
+  return !!document.querySelector(ROW_SELECTOR);
 }
 
 /**
- * Deep inbox scan: Gmail virtualizes rows (off-screen rows leave the DOM), so a
- * single pass only sees ~50. We scroll the list in steps, accumulating unique
- * candidates by id, until we reach `target` or the list stops growing — then
- * restore the user's original scroll position. Progress is reported via
- * `onProgress` so the side panel can show "Reading 320/500…".
+ * A cheap fingerprint of the current page's rows (subject + sender text).
+ * Robust to two things the real Gmail DOM showed us: rows expose no per-message
+ * id attributes, and the first row's text starts with a constant "Important
+ * because…" marker — so first-row identity is unreliable. Hashing ALL rows'
+ * content changes cleanly between pages.
  */
-export async function scanGmailInboxDeep(
+function pageFingerprint(): string {
+  const rows = Array.from(document.querySelectorAll(ROW_SELECTOR)) as HTMLElement[];
+  const parts = rows.map(
+    (r) =>
+      (r.querySelector(SUBJECT_SELECTOR)?.textContent ?? '') +
+      '|' +
+      (r.querySelector(SENDER_SELECTOR)?.textContent ?? '')
+  );
+  return `${rows.length}:${hash(parts.join('§'))}`;
+}
+
+/**
+ * Wait until the page advances after clicking "Older": the row fingerprint
+ * changes (new page rendered). Returns false on timeout (page didn't move).
+ */
+async function waitForPageChange(prevFp: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const fp = pageFingerprint();
+    if (fp && fp !== prevFp && document.querySelector(ROW_SELECTOR)) return true;
+    await sleep(150);
+  }
+  return false;
+}
+
+/**
+ * Paginated inbox scan (Option B). Designed to run inside a disposable,
+ * unfocused background Gmail tab: Gmail's web UI shows ~50 rows per page with
+ * Older/Newer arrows (it does NOT infinite-scroll), so we extract the current
+ * page, click "Older", wait for the next page to render, and repeat — paced to
+ * stay under Gmail's rate limiting — until we reach `target`, run out of pages,
+ * or hit a safety cap. Because the tab is throwaway we never restore position.
+ */
+export async function scanGmailInboxPaginated(
   target: number,
   onProgress?: (loaded: number) => void
 ): Promise<ScanResult> {
   const warnings: string[] = [];
   const byId = new Map<string, EmailCandidate>();
 
-  const firstRow = document.querySelector(ROW_SELECTOR) as HTMLElement | null;
-  if (!firstRow) {
+  if (!(await waitForRows(DEFAULTS.rowsAppearTimeoutMs))) {
     warnings.push('No inbox rows found. Is Gmail finished loading?');
     return ScanResultSchema.parse({
       provider: 'gmail',
@@ -169,41 +240,53 @@ export async function scanGmailInboxDeep(
     });
   }
 
-  const scroller = findScrollContainer(firstRow);
-  const startTop = scroller?.scrollTop ?? 0;
   let idx = 0;
-  let stagnant = 0;
-
-  try {
-    for (let i = 0; i < DEFAULTS.deepScanMaxScrolls; i++) {
-      const rows = Array.from(document.querySelectorAll(ROW_SELECTOR)) as HTMLElement[];
-      const before = byId.size;
-      for (const row of rows) {
-        const c = extractRow(row, idx++, warnings);
-        if (c && !byId.has(c.id)) byId.set(c.id, c);
-      }
-      onProgress?.(byId.size);
-
-      if (byId.size >= target) break;
-      if (byId.size === before) {
-        if (++stagnant >= 3) break; // list isn't growing — we've hit the end
-      } else {
-        stagnant = 0;
-      }
-      if (!scroller) break;
-
-      const prevTop = scroller.scrollTop;
-      scroller.scrollTop = Math.min(
-        scroller.scrollHeight,
-        scroller.scrollTop + Math.max(200, scroller.clientHeight * 0.9)
-      );
-      if (scroller.scrollTop === prevTop && byId.size === before) {
-        if (++stagnant >= 3) break;
-      }
-      await sleep(280); // let Gmail render the next window of rows
+  for (let page = 0; page < DEFAULTS.deepScanMaxPages; page++) {
+    if (looksRateLimited()) {
+      warnings.push('Gmail showed an unusual-activity page; stopped early to avoid a lockout.');
+      break;
     }
-  } finally {
-    if (scroller) scroller.scrollTop = startTop; // put the user back where they were
+
+    const rows = Array.from(document.querySelectorAll(ROW_SELECTOR)) as HTMLElement[];
+    for (const row of rows) {
+      const c = extractRow(row, idx++, warnings);
+      if (c && !byId.has(c.id)) byId.set(c.id, c);
+    }
+    onProgress?.(byId.size);
+    if (byId.size >= target) break;
+
+    // Is there another page? Gmail disables "Older" on the last page.
+    const older = findOlderButton();
+    if (!older) {
+      // No (enabled) Older button: either we've reached the end of the inbox,
+      // or the selector missed. Flag the latter so it's debuggable.
+      if (page === 0) {
+        warnings.push('Could not find an enabled "Older" page button — pagination unavailable.');
+      }
+      break;
+    }
+
+    // The scan tab is focused (brief-focus hybrid). Advance with a full mouse
+    // sequence on the "Older" arrow (Gmail's jsaction needs mousedown/mouseup,
+    // not a bare click). If that doesn't take, fall back to hash navigation,
+    // which can work now that the tab is visible.
+    const prevFp = pageFingerprint();
+    const half = Math.ceil(DEFAULTS.pageSettleTimeoutMs / 2);
+    realClick(older);
+    let advanced = await waitForPageChange(prevFp, half);
+    if (!advanced) {
+      const baseHash = (location.hash || '#inbox').replace(/\/p\d+$/, '');
+      location.hash = `${baseHash}/p${page + 2}`;
+      advanced = await waitForPageChange(prevFp, half);
+    }
+    if (!advanced) {
+      warnings.push(
+        `Stopped at page ${page + 1}: next page didn't load within ${DEFAULTS.pageSettleTimeoutMs}ms ` +
+          `(visibility=${document.visibilityState}, rows=${document.querySelectorAll(ROW_SELECTOR).length}).`
+      );
+      break;
+    }
+    await sleep(DEFAULTS.interPageDelayMs); // human-paced; anti-rate-limit
   }
 
   const candidates = Array.from(byId.values()).slice(0, target);
@@ -216,7 +299,7 @@ export async function scanGmailInboxDeep(
     threads: [],
     warnings,
   });
-  log.info('gmail deep scan', { count: candidates.length, warnings: warnings.length });
+  log.info('gmail paginated scan', { count: candidates.length, warnings: warnings.length });
   return scan;
 }
 

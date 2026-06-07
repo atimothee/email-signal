@@ -20,8 +20,23 @@ export const DEFAULTS = {
   approvalExpiryMs: 1000 * 60 * 30, // 30 minutes
   /** How many recent emails to deep-scan before sending to the sidecar. */
   deepScanTarget: 500,
-  /** Safety cap on scroll iterations during a deep scan. */
-  deepScanMaxScrolls: 60,
+  /**
+   * Background-tab paginated scan (Option B). Gmail's web UI paginates ~50 rows
+   * per page, so to reach `deepScanTarget` we click "Older" page by page inside
+   * an unfocused Gmail tab. These bound that loop and keep it human-paced so it
+   * doesn't trip Gmail's "unusual activity" rate limiting.
+   */
+  /** Hard cap on page navigations per scan (×~50 rows). 12 → up to ~600. */
+  deepScanMaxPages: 12,
+  /** Max wait for a page to render after navigating. Generous because hidden
+   *  background tabs are timer-throttled by Chrome, so renders run slower. */
+  pageSettleTimeoutMs: 12000,
+  /** Human-like delay between page navigations (anti-rate-limit pacing). */
+  interPageDelayMs: 700,
+  /** Max wait for the background Gmail tab to finish loading before scanning. */
+  bgTabReadyTimeoutMs: 25000,
+  /** Max wait for inbox rows to appear before concluding the page is empty. */
+  rowsAppearTimeoutMs: 10000,
 } as const;
 
 export const ALARMS = {

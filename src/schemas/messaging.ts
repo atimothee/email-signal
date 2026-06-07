@@ -33,7 +33,13 @@ export const ExtMessageSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('content/account_identity'), identity: AccountIdentitySchema }),
   // background -> content
-  z.object({ kind: z.literal('bg/request_scan'), source: z.enum(['inbox', 'thread', 'search']) }),
+  z.object({
+    kind: z.literal('bg/request_scan'),
+    source: z.enum(['inbox', 'thread', 'search']),
+    /** True when running inside a disposable background scan tab (Option B):
+     *  the scanner paginates freely and never restores scroll/page position. */
+    background: z.boolean().optional(),
+  }),
   z.object({ kind: z.literal('bg/execute_dom_action'), action: ProposedActionSchema }),
   z.object({ kind: z.literal('bg/highlight'), selector: z.string() }),
 
