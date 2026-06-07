@@ -17,7 +17,7 @@ import {
   getCachedClassification,
   setCachedClassification,
 } from './cache.js';
-import { recallAndMergePreferences } from './memory.js';
+import { reconcilePreferences } from './memory.js';
 
 const MODEL = process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini';
 
@@ -221,7 +221,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   // The client forwards what it has (chrome.storage); we union that with the
   // account's Redis-stored preferences (cross-device) and mirror new ones back.
   // The merged set both feeds synthesis and fingerprints the cache key.
-  const preferences = await recallAndMergePreferences(account, input.preferences ?? []);
+  const preferences = await reconcilePreferences(account, input.preferences ?? []);
 
   // ── 1) Exact-match cache ──
   // A rescan of an unchanged inbox under unchanged preferences is the same
@@ -277,6 +277,10 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     )
   );
 
+  // If any batch rejected, the assembled result is incomplete — we must NOT
+  // persist it (a transient failure would otherwise be cached for the full TTL).
+  let degraded = clutterSettled.some((r) => r.status === 'rejected');
+
   const clutter: ClutterFinding[] = [];
   for (const r of clutterSettled) {
     if (r.status !== 'fulfilled') continue;
@@ -321,6 +325,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
           })
       )
     );
+    if (settled.some((r) => r.status === 'rejected')) degraded = true;
     for (const r of settled) {
       if (r.status === 'fulfilled') {
         drafts.push(...((r.value.finalOutput as { decisions?: DecisionOut[] } | undefined)?.decisions ?? []));
@@ -342,9 +347,19 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   const decisions = hydrateDecisions(drafts, byId, friendlyName);
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: 'DecisionSynthesizerAgent', message: `decisions: ${decisions.length}` });
 
-  // Persist the derived result so the next identical scan is a cache hit.
+  // Persist the derived result so the next identical scan is a cache hit — but
+  // ONLY when every batch succeeded. Caching a partially-failed run would replay
+  // an under-classified inbox for the whole TTL.
   const result: ClassifyOutput = { clutter, decisions };
-  await setCachedClassification(cacheKey, result);
+  if (!degraded) {
+    await setCachedClassification(cacheKey, result);
+  } else {
+    await emit(writer, sessionId, turnId, {
+      kind: 'agent_end',
+      agent: AGENT_NAMES.orchestrator,
+      message: 'result not cached — a batch failed, so the run is incomplete',
+    });
+  }
 
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
   return result;
