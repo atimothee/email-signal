@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EmailCandidate, EmailCandidateSchema } from '../src/schemas/index.js';
 import { runAgentClassification } from '../server/agents.js';
+import { logWeaveEvaluation } from './weave-eval.js';
 
 /**
  * Theme-categorization eval.
@@ -74,6 +75,28 @@ async function classify(c: Case): Promise<Prediction> {
   return { surfaced: !!decision, theme: decision?.theme ?? null };
 }
 
+/**
+ * Memoize `classify` by case name so each case is classified at most once,
+ * whether the call originates from the Weave Evaluation's model op or the local
+ * pass/total summary loop. This lets the Weave Evaluation be the single real
+ * classification run while the local summary replays the same predictions for
+ * free. Tradeoff: a case whose first attempt THREW is not cached (the rejected
+ * promise is dropped), so it may be retried once by the local loop — acceptable
+ * since classification errors are rare and we want the local failure report.
+ */
+function makeClassifyMemo() {
+  const cache = new Map<string, Promise<Prediction>>();
+  return (c: Case): Promise<Prediction> => {
+    const cached = cache.get(c.name);
+    if (cached) return cached;
+    const p = classify(c);
+    cache.set(c.name, p);
+    // Don't cache rejections: drop the entry so a thrown case can be retried.
+    p.catch(() => cache.delete(c.name));
+    return p;
+  };
+}
+
 /** Per-row scoring shared by the local summary and the Weave scorers. */
 function scoreSurfaced(c: Case, p: Prediction): boolean {
   return p.surfaced === c.expectSurfaces;
@@ -97,56 +120,43 @@ function failureFor(c: Case, p: Prediction): string | null {
 }
 
 /**
- * Optionally mirror the run as a Weave Evaluation so it shows up in wandb.ai.
- * Predictions are replayed from `cache` (keyed by case name) so this does NOT
- * make a second round of LLM calls. Best-effort: any failure is swallowed since
- * Weave is optional.
+ * Run the eval AS a Weave Evaluation so it shows up in wandb.ai. The model op
+ * invokes the REAL classifier per row (via the shared `classifyMemo`), so Weave
+ * captures real per-case latency, inputs/outputs, and nested generation spans.
+ * The local summary loop later replays the same memoized predictions for free,
+ * so each case is classified exactly once. Best-effort: any failure is swallowed
+ * since Weave is optional. Returns true if the Weave Evaluation actually ran
+ * (so the caller knows the memo was populated by the eval).
  */
-async function logToWeave(cases: Case[], cache: Map<string, Prediction>): Promise<void> {
-  if (!process.env['WANDB_API_KEY']) return;
-  try {
-    const weave: any = await import('weave');
-    // Eval runs land in a SEPARATE project from prod traces by default
-    // (overridable via WANDB_PROJECT) so prod traces stay uncluttered (#47).
-    const evalProject = process.env['WANDB_PROJECT'] ?? 'email-signal-evals';
-    await weave.init(evalProject);
-
-    const dataset = new weave.Dataset({
-      id: 'email-theme-categorization',
-      rows: cases.map((c) => ({
-        id: c.name,
-        name: c.name,
-        subject: c.subject,
-        from: c.from.email,
-        expectSurfaces: c.expectSurfaces,
-        expectedTheme: c.expectedTheme ?? null,
-        forbiddenTheme: c.forbiddenTheme ?? null,
-      })),
-    });
-
-    const model = weave.op(async function themeModel(input: any) {
-      const row = input.datasetRow ?? input;
-      return cache.get(row.name) ?? { surfaced: false, theme: null };
-    });
-
-    const lookup = (row: any): Case => cases.find((c) => c.name === row.name)!;
-    const surfacedScorer = weave.op(function surfaces({ datasetRow, modelOutput }: any) {
-      return scoreSurfaced(lookup(datasetRow), modelOutput);
-    });
-    const themeScorer = weave.op(function theme({ datasetRow, modelOutput }: any) {
-      return scoreTheme(lookup(datasetRow), modelOutput);
-    });
-
-    const evaluation = new weave.Evaluation({
-      id: 'theme-categorization',
-      dataset,
-      scorers: [surfacedScorer, themeScorer],
-    });
-    await evaluation.evaluate({ model });
-    console.log('  ↳ logged Weave evaluation to W&B project', evalProject);
-  } catch (err) {
-    console.warn('  ↳ weave logging skipped:', (err as Error)?.message ?? err);
-  }
+async function logToWeave(
+  cases: Case[],
+  classifyMemo: (c: Case) => Promise<Prediction>
+): Promise<boolean> {
+  const byName = new Map(cases.map((c) => [c.name, c]));
+  // Real classifier work happens inside the model op (via classifyMemo), so Weave
+  // captures latency, inputs/outputs, and nested generation spans per case.
+  return logWeaveEvaluation<Record<string, unknown>, Prediction>({
+    datasetId: 'email-theme-categorization',
+    evaluationId: 'theme-categorization',
+    modelName: 'themeModel',
+    rows: cases.map((c) => ({
+      id: c.name,
+      name: c.name,
+      subject: c.subject,
+      from: c.from.email,
+      expectSurfaces: c.expectSurfaces,
+      expectedTheme: c.expectedTheme ?? null,
+      forbiddenTheme: c.forbiddenTheme ?? null,
+    })),
+    model: (row) => {
+      const c = byName.get(row['name'] as string);
+      return c ? classifyMemo(c) : { surfaced: false, theme: null };
+    },
+    scorers: {
+      surfaces: (row, out) => scoreSurfaced(byName.get(row['name'] as string)!, out),
+      theme: (row, out) => scoreTheme(byName.get(row['name'] as string)!, out),
+    },
+  });
 }
 
 export async function runCategorizationEval(): Promise<Result & { skipped?: boolean }> {
@@ -158,24 +168,30 @@ export async function runCategorizationEval(): Promise<Result & { skipped?: bool
   }
 
   const failures: string[] = [];
-  const cache = new Map<string, Prediction>();
   let passed = 0;
+
+  // Single shared, memoized classifier: each case is classified at most once
+  // across BOTH the Weave Evaluation (if enabled) and the local summary below.
+  const classifyMemo = makeClassifyMemo();
+
+  // When WANDB_API_KEY is set this runs the Weave Evaluation, which invokes the
+  // real classifier per row and populates the memo. When it is unset this is a
+  // no-op and the local loop drives `classifyMemo` directly. Either way each
+  // case is classified exactly once.
+  await logToWeave(cases, classifyMemo);
 
   for (const c of cases) {
     let prediction: Prediction;
     try {
-      prediction = await classify(c);
+      prediction = await classifyMemo(c);
     } catch (err) {
       failures.push(`${c.name}: classification threw — ${(err as Error)?.message ?? err}`);
       continue;
     }
-    cache.set(c.name, prediction);
     const failure = failureFor(c, prediction);
     if (failure) failures.push(failure);
     else passed++;
   }
-
-  await logToWeave(cases, cache);
 
   return { passed, total: cases.length, failures };
 }

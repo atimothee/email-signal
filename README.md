@@ -168,9 +168,18 @@ EmailSignal assumes the **first thing that goes wrong is the agent doing somethi
 
 ## Observability
 
-Tracing runs **server-side** via W&B Weave. When `WANDB_API_KEY` is set, the sidecar calls `initServerWeave()` and wraps each agent run as a named Weave op (`email_signal.classify_clutter`, `email_signal.synthesize_decisions`, `email_signal.chat`, …), so inputs/outputs show up in the W&B dashboard. Without the key it is a zero-overhead pass-through.
+Tracing runs **server-side** via W&B Weave. Start the sidecar with the keys set and the traces flow:
 
-In the extension, `src/weave/tracing.ts` still records a local trace stream (`session_start / agent_start / agent_end / error / …`) that drives the in-panel **Agent activity** cockpit and is mirrored to the side panel over `bg/trace_event`.
+```bash
+WANDB_API_KEY=…  WANDB_PROJECT=email-signal  OPENAI_API_KEY=…  npm run server
+# (or put them in server/.env — see Configuration above — and just `npm run server`)
+```
+
+When `WANDB_API_KEY` is set, the sidecar calls `initServerWeave()`, then routes the OpenAI Agents SDK through a **Weave-wrapped OpenAI client** (`wrapOpenAI` + `setDefaultOpenAIClient`, switched to the Chat Completions API so `wrapOpenAI` can see generations). Each pipeline stage is a named Weave op defined **once** and reused (`email_signal.classify_clutter`, `email_signal.synthesize_decisions`, `email_signal.consolidate_decisions`, `email_signal.day_summary`, `email_signal.chat`). Every stage records the real `sessionId`/`turnId`/`model` (so all stages of one scan group together), has **nested generation spans** with the actual prompt/response and **token counts**, and is annotated with derived `inputTokens`/`outputTokens`/`totalTokens` and `cost_usd` (from a per-model pricing table in `server/agents.ts`). A failing batch marks its span as errored. Without `WANDB_API_KEY` it is a byte-for-byte, zero-overhead pass-through — no client swap, no Weave calls.
+
+> The Chat Completions switch happens **only** when Weave tracing is active; with tracing off the SDK keeps its default (Responses API).
+
+In the extension, `src/weave/tracing.ts` records a local trace stream (`session_start / agent_start / agent_end / error / …`) that drives the in-panel **Agent activity** cockpit and is mirrored to the side panel over `bg/trace_event`. This stream is **local-only by design** — the extension can't load the Node-only Weave SDK, so real W&B traces come exclusively from the sidecar above.
 
 ---
 
@@ -196,6 +205,8 @@ npm run eval:categorize     # clutter vs signal categorization
 ```
 
 Each suite is a `tsx`-runnable script that loads JSON fixtures and asserts expected values, exiting non-zero on any failure so CI can wire them in.
+
+When `WANDB_API_KEY` is set, every suite also logs a **versioned W&B Weave Evaluation** (a `weave.Dataset` + scorers) via the shared helper in [`evals/weave-eval.ts`](evals/weave-eval.ts), so runs are tracked and comparable over time — editing a fixture publishes a new dataset version rather than overwriting it. Datasets: `email-theme-categorization`, `email-safety-cases`, `email-memory-recall`, `email-handoffs`. Without the key the suites run exactly as before (local pass/fail, no Weave). The `safety`/`memory`/`handoffs` suites are deterministic (no LLM); only `categorize` needs `OPENAI_API_KEY`.
 
 ---
 
@@ -230,7 +241,7 @@ server/                        # the Node sidecar (all intelligence)
   embeddings.ts                # batched OpenAI embeddings
   dedup.ts                     # vector clustering / decision dedup
   memory.ts                    # server-side preference reconcile
-  trace-bridge.ts              # SSE writer + Weave emit
+  trace-bridge.ts              # SSE writer (streams trace events to the extension)
 
 src/
   schemas/                     # Zod contracts (single source of truth)
