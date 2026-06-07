@@ -1,6 +1,8 @@
 export const APP_NAME = 'EmailSignal';
 export const STORAGE_KEYS = {
-  preferences: 'es.preferences.v1',
+  // NOTE: user preferences live in the memory store (es.mem.prefs, keyed by
+  // userId) — see src/memory/json-store.ts. The old flat 'es.preferences.v1'
+  // key was retired because the scan never read it (muting was a no-op).
   ledger: 'es.ledger.v1',
   killSwitch: 'es.killSwitch.v1',
   dryRun: 'es.dryRun.v1',

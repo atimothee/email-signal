@@ -871,6 +871,12 @@ function groupClutter(findings: ClutterFinding[], scan: EmailCandidate[]): Clutt
         rationale: list[0]!.rationale,
         suggestedActions: Array.from(new Set(list.map((f) => f.suggestedAction))),
         emailIds: list.map((f) => f.emailId),
+        rowAnchors: list
+          .map((f) => {
+            const sel = scan.find((c) => c.id === f.emailId)?.domAnchor?.rowSelector;
+            return sel ? { emailId: f.emailId, rowSelector: sel } : null;
+          })
+          .filter((a): a is { emailId: string; rowSelector: string } => a !== null),
       })
     );
   }

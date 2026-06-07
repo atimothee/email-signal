@@ -3,6 +3,7 @@ import { usePanelStore } from '../state/store';
 import { CleanupThemeCard } from '../cards/CleanupThemeCard';
 import { EmptyState, Skeleton, ErrorState } from '../cards/primitives';
 import { send } from '../state/bridge';
+import { normalizeProposedAction } from '@agents/action-factory';
 import type { ClutterCategory, ClutterSenderGroup, ProposedAction } from '@schemas/index';
 
 /** Order themes by how worth-acting-on they are. */
@@ -35,6 +36,7 @@ export function ClutterTab(): JSX.Element {
   const scanStatus = usePanelStore((s) => s.scanStatus);
   const lastError = usePanelStore((s) => s.lastError);
   const removeProposedAction = usePanelStore((s) => s.removeProposedAction);
+  const removeGroupsByDomain = usePanelStore((s) => s.removeGroupsByDomain);
 
   const scanning = scanStatus === 'reading' || scanStatus === 'thinking';
 
@@ -100,7 +102,13 @@ export function ClutterTab(): JSX.Element {
     removeProposedAction(id);
   };
 
+  // Mute is the "make this sender go away properly" action: hide it from future
+  // scans, unsubscribe at the source when we have a link, and clear the noise
+  // it already left. Every inbox-touching step (unsubscribe, mark_read) routes
+  // through the policy gate, so dry-run and the kill switch still apply — Mute
+  // never bypasses the safety model, it just bundles the approvals.
   const muteSender = (g: ClutterSenderGroup) => {
+    // 1) Hide future: persist an ignored_sender preference the scan recalls.
     send({
       kind: 'panel/save_preference',
       preference: {
@@ -113,6 +121,26 @@ export function ClutterTab(): JSX.Element {
         updatedAt: new Date().toISOString(),
       },
     });
+
+    // 2) Unsubscribe at the source when a (gated) proposal exists for this
+    //    sender. No-ops for senders without a List-Unsubscribe link.
+    approveUnsub(g);
+
+    // 3) Clear the existing pile: mark each of this sender's messages read.
+    //    rowAnchors carry the Gmail selectors resolved at scan time.
+    for (const anchor of g.rowAnchors) {
+      const action = normalizeProposedAction({
+        type: 'mark_read',
+        emailId: anchor.emailId,
+        params: { rowSelector: anchor.rowSelector },
+        proposedBy: 'orchestrator',
+        rationale: `Muted ${g.senderDisplay}`,
+      });
+      send({ kind: 'panel/execute_action', action });
+    }
+
+    // 4) Optimistic feedback: the muted sender leaves the list immediately.
+    removeGroupsByDomain(g.senderDomain);
   };
 
   return (

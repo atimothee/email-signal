@@ -3,6 +3,8 @@ import { onMessage, sendToTab } from '@/common/messaging';
 import { ALARMS, DEFAULTS, STORAGE_KEYS } from '@/common/constants';
 import { log } from '@/common/log';
 import { runOrchestratorTurn } from '@agents/orchestrator';
+import { USER_ID } from '@agents/runtime';
+import { getMemoryStore } from '@/memory';
 import { appendLedger, getLedger } from '@/ledger/local-ledger';
 import { recordTrace } from '@/weave/tracing';
 import { AccountIdentitySchema } from '@schemas/index';
@@ -276,12 +278,12 @@ onMessage(async (msg, sender) => {
         return;
       }
       case 'panel/save_preference': {
-        const existing =
-          ((await chrome.storage.local.get(STORAGE_KEYS.preferences))[
-            STORAGE_KEYS.preferences
-          ] as Record<string, unknown>[]) ?? [];
-        existing.push(msg.preference);
-        await chrome.storage.local.set({ [STORAGE_KEYS.preferences]: existing });
+        // Write through the memory store (es.mem.prefs, keyed by USER_ID) — the
+        // SAME store the scan recalls from via listPreferences. Writing to the
+        // old flat preferences array was a dead end the scan never read, which
+        // is what made Mute / "ignore sender" no-ops.
+        const store = await getMemoryStore();
+        await store.upsertPreference(USER_ID, msg.preference);
         return;
       }
       case 'panel/decision_action': {
@@ -335,12 +337,9 @@ onMessage(async (msg, sender) => {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
-        const existing =
-          ((await chrome.storage.local.get(STORAGE_KEYS.preferences))[
-            STORAGE_KEYS.preferences
-          ] as Record<string, unknown>[]) ?? [];
-        existing.push(pref);
-        await chrome.storage.local.set({ [STORAGE_KEYS.preferences]: existing });
+        // Same memory store the scan recalls from — see panel/save_preference.
+        const store = await getMemoryStore();
+        await store.upsertPreference(USER_ID, pref);
         await recordTrace({
           kind: 'approval_granted',
           message: msg.kind,
