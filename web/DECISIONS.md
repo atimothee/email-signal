@@ -50,8 +50,9 @@ installed on laptop" path the brief flagged.
 ## Honest copy choices (do not loosen without re-reading the README)
 
 - The hero subhead and trust line both say what we actually do: "reads the
-  Gmail you have open", "no Google login", "runs on your own machine". No
-  language that could be read as OAuth or "we sync your inbox".
+  Gmail or Outlook you have open", "no Google or Microsoft login", "runs
+  on your own machine". No language that could be read as OAuth or "we
+  sync your inbox".
 - The Safety section's six guarantees are lifted directly from the README's
   Safety model section. Every one is verifiable in code (`policy.ts`, the
   ledger, the dry-run flag, the kill switch).
@@ -66,10 +67,10 @@ installed on laptop" path the brief flagged.
 ## The signature animation
 
 `BeforeAfterDemo.tsx` auto-cycles through three phases — `before` (messy
-Gmail with 84 unread visible), `thinking` (pulse + caption "Reading your
-inbox…"), `after` (three decision cards + a single Cleanup line + the
-honest day summary). It pauses when scrolled out of view, and a small
-`↻ Replay` button appears once you've seen it.
+inbox with hundreds of unread visible), `thinking` (pulse + caption
+"Reading your inbox…"), `after` (three decision cards + a single Cleanup
+line + the honest day summary). It pauses when scrolled out of view, and
+a small `↻ Replay` button appears once you've seen it.
 
 With `prefers-reduced-motion: reduce`, the component jumps straight to
 `after` and skips the loop. The CSS file also globally clamps animation

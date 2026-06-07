@@ -209,8 +209,8 @@ export function BeforeAfterDemo() {
                       Ready when you are
                     </p>
                     <p className="mt-1.5 text-[12px] text-text-dim">
-                      Open Gmail. I&apos;ll read what you see and pull the few
-                      things that need you.
+                      Open Gmail or Outlook. I&apos;ll read what you see and
+                      pull the few things that need you.
                     </p>
                   </motion.div>
                 )}

@@ -20,7 +20,7 @@ const STEPS = [
   },
   {
     n: "3",
-    title: "Paste your AI key & open Gmail",
+    title: "Paste your AI key & open Gmail or Outlook",
     body: "EmailSignal walks you through getting an OpenAI key (a 1-minute, copy-paste step). Then your Today list appears right next to your inbox.",
   },
 ];

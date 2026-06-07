@@ -82,8 +82,8 @@ export default async function TwitterImage() {
               display: "flex",
             }}
           >
-            Reads only the Gmail you can see. Never sends or deletes. Open
-            source.
+            Reads only the Gmail or Outlook you can see. Never sends or
+            deletes. Open source.
           </div>
         </div>
 

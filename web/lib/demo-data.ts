@@ -78,7 +78,7 @@ export const DEMO_EMAILS: DemoEmail[] = [
   { id: "p2", sender: "Calendar", subject: "Past event: Coffee w/ Anh — May 22, 10am", snippet: "Recap: confirmed attended.", bucket: "past", receivedAt: "May 22" },
 ];
 
-export const TOTAL_UNREAD = 84;
+export const TOTAL_UNREAD = 137;
 
 export type Decision = {
   id: string;

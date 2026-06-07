@@ -11,8 +11,8 @@ export function Footer() {
           <div>
             <Wordmark />
             <p className="mt-3 max-w-xs text-[13px] leading-relaxed text-text-dim">
-              A small, honest layer on top of Gmail. Reads only what you can
-              see. Never sends or deletes. Open source.
+              A small, honest layer on top of Gmail and Outlook. Reads only
+              what you can see. Never sends or deletes. Open source.
             </p>
             <a
               href={SITE.githubUrl}

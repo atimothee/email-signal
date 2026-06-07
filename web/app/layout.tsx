@@ -14,6 +14,7 @@ export const metadata: Metadata = {
   authors: [{ name: "EmailSignal" }],
   keywords: [
     "Gmail",
+    "Outlook",
     "email triage",
     "inbox zero alternative",
     "email AI",
