@@ -14,7 +14,7 @@ import {
 } from '@schemas/index';
 import { checkPolicy } from './policy';
 import { getMemoryStore } from '@/memory';
-import { isDryRun, isKillSwitchOn, USER_ID } from './runtime';
+import { isDryRun, isKillSwitchOn, getAccountId } from './runtime';
 import { recordProposed, appendLedger, getLedger } from '@/ledger/local-ledger';
 import { notifyScanResults } from '@/background/notifications';
 import { recordTrace, startSession, getSessionId } from '@/weave/tracing';
@@ -124,7 +124,7 @@ async function buildContext(turnId: string): Promise<AgentContext> {
   return {
     turnId,
     sessionId: getSessionId(),
-    userId: USER_ID,
+    userId: await getAccountId(),
     dryRun: await isDryRun(),
     killSwitch: false,
     preferences: [],
@@ -914,7 +914,7 @@ async function broadcast(msg: import('@schemas/index').ExtMessage): Promise<void
 // Memory recall: load preferences so other agents can read them.
 export async function loadPreferenceContext() {
   const store = await getMemoryStore();
-  return await store.listPreferences(USER_ID);
+  return await store.listPreferences(await getAccountId());
 }
 
 // ---------- Test surface ----------

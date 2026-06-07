@@ -9,7 +9,7 @@ import {
 import { getMemoryStore } from '@/memory';
 import { getLedger } from '@/ledger/local-ledger';
 import { getServerBase } from '@/common/server-client';
-import { USER_ID } from './runtime';
+import { getAccountId } from './runtime';
 
 /**
  * Try the sidecar's semantic recall first (Context Retriever vector index +
@@ -27,7 +27,7 @@ async function recallViaSidecar(args: {
     const res = await fetch(`${base}/memory/recall`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account: USER_ID, kind: args.kind, q: args.q, k: 10 }),
+      body: JSON.stringify({ account: await getAccountId(), kind: args.kind, q: args.q, k: 10 }),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as { ok?: boolean; records?: unknown[] };
@@ -80,7 +80,7 @@ export const ToolSchemas = {
       const viaSidecar = await recallViaSidecar(args);
       if (viaSidecar) return viaSidecar;
       const store = await getMemoryStore();
-      return store.recallMemories(USER_ID, { kind: args.kind as any, q: args.q });
+      return store.recallMemories(await getAccountId(), { kind: args.kind as any, q: args.q });
     },
   },
   propose_memory: {

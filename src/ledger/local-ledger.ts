@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid';
 import { STORAGE_KEYS } from '@/common/constants';
+import { USER_ID, getAccountId } from '@/agents/runtime';
 import {
   ActionLedgerEntry,
   ActionLedgerEntrySchema,
@@ -8,27 +9,50 @@ import {
   ProposedAction,
 } from '@schemas/index';
 
-const memEntries: ActionLedgerEntry[] = [];
+/**
+ * The ledger is partitioned per connected account (issue #5): on disk it is a
+ * `{ [accountId]: ActionLedgerEntry[] }` map under STORAGE_KEYS.ledger. Public
+ * functions keep their old parameterless signatures and resolve the *active*
+ * account themselves via getAccountId(), so the ~14 call sites are unchanged.
+ */
+type LedgerMap = Record<string, ActionLedgerEntry[]>;
+
+const memMap = new Map<string, ActionLedgerEntry[]>();
 
 function isExtension(): boolean {
   return typeof chrome !== 'undefined' && !!chrome.storage?.local;
 }
 
-async function readAll(): Promise<ActionLedgerEntry[]> {
+async function readMap(): Promise<LedgerMap> {
   if (isExtension()) {
-    const v = await chrome.storage.local.get(STORAGE_KEYS.ledger);
-    const raw = (v[STORAGE_KEYS.ledger] as ActionLedgerEntry[]) ?? [];
-    return raw;
+    const raw = (await chrome.storage.local.get(STORAGE_KEYS.ledger))[STORAGE_KEYS.ledger];
+    // Legacy flat array (pre-#5) belongs to the original single user; surface it
+    // under USER_ID so it migrates cleanly into the first real account.
+    if (Array.isArray(raw)) return { [USER_ID]: raw as ActionLedgerEntry[] };
+    return (raw as LedgerMap) ?? {};
   }
-  return [...memEntries];
+  return Object.fromEntries(memMap);
+}
+
+async function writeMap(map: LedgerMap): Promise<void> {
+  if (isExtension()) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.ledger]: map });
+  } else {
+    memMap.clear();
+    for (const [k, v] of Object.entries(map)) memMap.set(k, v);
+  }
+}
+
+async function readAll(): Promise<ActionLedgerEntry[]> {
+  const account = await getAccountId();
+  return (await readMap())[account] ?? [];
 }
 
 async function writeAll(entries: ActionLedgerEntry[]): Promise<void> {
-  if (isExtension()) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.ledger]: entries });
-  } else {
-    memEntries.splice(0, memEntries.length, ...entries);
-  }
+  const account = await getAccountId();
+  const map = await readMap();
+  map[account] = entries;
+  await writeMap(map);
 }
 
 export async function recordProposed(proposed: ProposedAction): Promise<ActionLedgerEntry> {
