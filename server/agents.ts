@@ -1,4 +1,6 @@
 import { Agent, run, setDefaultOpenAIKey } from '@openai/agents';
+import { setDefaultOpenAIClient, setOpenAIAPI } from '@openai/agents-openai';
+import OpenAI from 'openai';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import {
@@ -36,6 +38,88 @@ let weaveReady = false;
  * reach `weave.op` without re-importing. Null until (and unless) init succeeds.
  */
 let weaveMod: typeof import('weave') | null = null;
+/**
+ * Stage ops, defined ONCE per name and reused across every call. Re-`op()`-ifying
+ * a fresh closure per call (the previous behavior) is a weave anti-pattern — one
+ * op object per stage is the supported shape. The varying per-call work is passed
+ * as a thunk argument; only the small `input` summary (incl. sessionId) is
+ * recorded, so all stages of one scan group together by sessionId in the dashboard.
+ */
+const stageOps = new Map<
+  string,
+  (input: unknown, thunk: () => Promise<unknown>) => Promise<unknown>
+>();
+/**
+ * Guard: install the Weave-wrapped OpenAI client + chat_completions mode exactly
+ * once. The first OpenAI key wins, matching `ensureServerWeave`'s first-key-wins
+ * contract (hot-swapping the traced client mid-process isn't supported).
+ */
+let tracedClientInstalled = false;
+
+/**
+ * Per-1M-token USD pricing, keyed by model id (prefix match). Kept in ONE place so
+ * it's trivial to update. Used to derive a `cost_usd` span attribute from the
+ * token usage the wrapped client records. Unknown models → cost is simply omitted
+ * (never guessed). Source: OpenAI public pricing; update as prices change.
+ */
+const MODEL_PRICING_PER_MTOK: Record<string, { input: number; output: number }> = {
+  'gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'gpt-4o': { input: 2.5, output: 10 },
+  'gpt-4.1-mini': { input: 0.4, output: 1.6 },
+  'gpt-4.1-nano': { input: 0.1, output: 0.4 },
+  'gpt-4.1': { input: 2, output: 8 },
+  'o4-mini': { input: 1.1, output: 4.4 },
+};
+
+/** Look up pricing by longest matching model-id prefix; null when unknown. */
+function pricingFor(model: string | undefined): { input: number; output: number } | null {
+  if (!model) return null;
+  let best: { input: number; output: number } | null = null;
+  let bestLen = -1;
+  for (const [id, price] of Object.entries(MODEL_PRICING_PER_MTOK)) {
+    if (model.startsWith(id) && id.length > bestLen) {
+      best = price;
+      bestLen = id.length;
+    }
+  }
+  return best;
+}
+
+/**
+ * Best-effort cost/usage summary for a stage op, derived from an Agents SDK
+ * `run()` result's `rawResponses[].usage`. Fully defensive: any unexpected shape
+ * yields `{}` so a summary can never break a run or the trace. Returned object is
+ * recorded as extra attributes on the op call (tokens + cost_usd + model).
+ */
+function summarizeUsage(result: unknown): Record<string, unknown> {
+  try {
+    const responses = (result as { rawResponses?: Array<{ usage?: any }> } | undefined)?.rawResponses;
+    if (!Array.isArray(responses) || responses.length === 0) return {};
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let totalTokens = 0;
+    let model: string | undefined;
+    for (const r of responses) {
+      const u = r?.usage;
+      if (!u) continue;
+      inputTokens += Number(u.inputTokens ?? 0) || 0;
+      outputTokens += Number(u.outputTokens ?? 0) || 0;
+      totalTokens += Number(u.totalTokens ?? 0) || 0;
+      if (!model && typeof (r as any)?.model === 'string') model = (r as any).model;
+    }
+    if (totalTokens === 0 && inputTokens === 0 && outputTokens === 0) return {};
+    const out: Record<string, unknown> = { inputTokens, outputTokens, totalTokens };
+    const price = pricingFor(model);
+    if (price) {
+      out['cost_usd'] =
+        (inputTokens / 1_000_000) * price.input + (outputTokens / 1_000_000) * price.output;
+    }
+    if (model) out['model'] = model;
+    return out;
+  } catch {
+    return {};
+  }
+}
 /**
  * The fully-qualified "<entity>/<project>" id the weave SDK resolved at init
  * time (it fills in the default entity from the signed-in account). Captured so
@@ -140,22 +224,34 @@ export function weaveDashboardUrl(settings?: ClientSettings): string | null {
   return `https://wandb.ai/${cfg.wandbProject}/weave`;
 }
 
+/** Get (or lazily define, once) the reusable Weave op for a stage `name`. */
+function stageOp(
+  name: string
+): (input: unknown, thunk: () => Promise<unknown>) => Promise<unknown> {
+  let opFn = stageOps.get(name);
+  if (!opFn) {
+    // Define the op ONCE per stage name and reuse it across calls (see stageOps).
+    // The op records only `input` (parameterNames) — not the thunk — and attaches
+    // token usage + cost_usd via summarize. Weave records call latency and thrown
+    // errors natively, so a rejecting thunk marks the span as errored automatically.
+    opFn = weaveMod!.op(
+      async (_input: unknown, thunk: () => Promise<unknown>) => thunk(),
+      { name, parameterNames: ['input'], summarize: (result) => summarizeUsage(result) }
+    ) as unknown as (input: unknown, thunk: () => Promise<unknown>) => Promise<unknown>;
+    stageOps.set(name, opFn);
+  }
+  return opFn;
+}
+
 /**
- * Wrap an async thunk as a named Weave op so it shows up in the W&B dashboard
- * with its inputs/outputs. When Weave isn't initialized (no WANDB_API_KEY) this
- * is a transparent pass-through: the thunk is just awaited, zero overhead.
- *
- * We `op()`-ify a fresh closure per call (cheap) rather than caching, because the
- * captured `input` is what Weave records as the op's argument — giving each run
- * site a distinct, inspectable trace.
+ * Run an async thunk inside the reusable Weave op for `name`, recording `input`
+ * (a small summary incl. sessionId/turnId/model so a scan's stages group together)
+ * plus derived token usage + cost. When Weave isn't initialized (no WANDB_API_KEY)
+ * this is a transparent pass-through: the thunk is just awaited, zero overhead.
  */
 async function traced<T>(name: string, input: unknown, fn: () => Promise<T>): Promise<T> {
   if (!weaveReady || !weaveMod) return fn();
-  // weave.op(fn, { name }) returns a wrapped fn that auto-tracks the call.
-  // Signature (from weave 0.7 op.d.ts):
-  //   op<T>(fn: T, options?: { name?: string; ... }): Op<(...args) => Promise<...>>
-  const wrapped = weaveMod.op(async (_input: unknown) => fn(), { name });
-  return wrapped(input);
+  return stageOp(name)(input, fn as () => Promise<unknown>) as Promise<T>;
 }
 
 /**
@@ -165,7 +261,46 @@ async function traced<T>(name: string, input: unknown, fn: () => Promise<T>): Pr
  * `@openai/agents` SDK — never sent anywhere else.
  */
 function ensureKey(settings?: ClientSettings): void {
-  setDefaultOpenAIKey(requireOpenAIKey(settings));
+  const key = requireOpenAIKey(settings);
+  setDefaultOpenAIKey(key);
+  installTracedOpenAIClient(key);
+}
+
+/**
+ * When Weave is initialized, route the Agents SDK through a Weave-wrapped OpenAI
+ * client so real generations — prompt, response, model, token usage — are captured
+ * as nested spans under each stage op. `wrapOpenAI` only patches the Chat
+ * Completions API (NOT the Responses API the Agents SDK defaults to), so we also
+ * switch the SDK to chat_completions — but ONLY when tracing is active, leaving the
+ * default Responses path byte-for-byte unchanged when Weave is off. Installed once
+ * (first key wins); never throws — tracing must never break a run.
+ */
+function installTracedOpenAIClient(apiKey: string): void {
+  if (!weaveReady || !weaveMod || tracedClientInstalled) return;
+  try {
+    const client = new OpenAI({ apiKey });
+    // weave@0.7.5's wrapOpenAI eagerly builds a proxy over `client.beta.chat.completions`,
+    // a path openai@5.x removed (`beta.chat` is now undefined) — so the unshimmed call
+    // throws "Cannot read properties of undefined (reading 'completions')". The Agents
+    // SDK never touches that beta path (it calls chat.completions.create, which weave
+    // proxies via the top-level `chat` handler), so a harmless stub lets wrapOpenAI build
+    // its proxy and generation tracing works. `client.beta` is a stable reference, so the
+    // stub persists.
+    const betaClient = (client as unknown as { beta?: { chat?: unknown } }).beta;
+    if (betaClient && !betaClient.chat) betaClient.chat = { completions: {} };
+    // Both weave's `wrapOpenAI` and the Agents SDK's `setDefaultOpenAIClient` carry
+    // their own (version-skewed) `openai` client types. The runtime object is the
+    // same client; cast at these two boundaries to bridge the TS skew.
+    const wrapped = weaveMod.wrapOpenAI(client as never);
+    setDefaultOpenAIClient(wrapped as never);
+    setOpenAIAPI('chat_completions');
+    tracedClientInstalled = true;
+    console.log(
+      '[emailsignal-server] Agents SDK routed through Weave-wrapped OpenAI (chat_completions) — generations are now traced'
+    );
+  } catch (err) {
+    console.warn('[emailsignal-server] failed to install Weave-wrapped OpenAI client', err);
+  }
 }
 
 // ---- Shared schemas ----
@@ -335,7 +470,11 @@ function buildDaySummaryAgent(model: string): Agent<unknown, typeof DaySummarySc
  * activity). Fully defensive — any failure degrades to '' and never throws, so a
  * summary problem can never break the decisions flow.
  */
-async function summarizeDay(decisions: Decision[], model: string): Promise<string> {
+async function summarizeDay(
+  decisions: Decision[],
+  model: string,
+  trace?: { sessionId: string; turnId: string }
+): Promise<string> {
   if (decisions.length === 0) return '';
   try {
     const slim = decisions.map((d) => ({
@@ -348,7 +487,7 @@ async function summarizeDay(decisions: Decision[], model: string): Promise<strin
     }));
     const result = await traced(
       'email_signal.day_summary',
-      { decisions: decisions.length },
+      { sessionId: trace?.sessionId, turnId: trace?.turnId, model, decisions: decisions.length },
       () =>
         run(
           buildDaySummaryAgent(model),
@@ -377,10 +516,12 @@ async function summarizeDay(decisions: Decision[], model: string): Promise<strin
  */
 export async function runAgentClassification(input: ClassifyInput): Promise<ClassifyOutput> {
   const cfg = resolveConfig(input.settings);
-  ensureKey(input.settings);
   // Initialize Weave on first run if a key is available (override or env). No-op
   // and never throws once ready / when no key — tracing must never break a run.
+  // Must run BEFORE ensureKey so the latter can route the SDK through the
+  // Weave-wrapped OpenAI client when (and only when) tracing is active.
   await ensureServerWeave(cfg.wandbApiKey, cfg.wandbProject).catch(() => {});
+  ensureKey(input.settings);
   const sessionId = nanoid();
   const { turnId, candidates, writer, account } = input;
   // Anchor "now" once for the whole scan: the model's temporal frame and all
@@ -419,7 +560,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     // The cache stores only { clutter, decisions }; recompute the one-sentence
     // day summary over the cached ACTIVE (non-demoted) decisions (cheap, honest,
     // degrades to ''). Cached decisions already carry their demoted flag.
-    return { ...cached, summary: await summarizeDay(cached.decisions.filter((d) => !d.demoted), cfg.model) };
+    return { ...cached, summary: await summarizeDay(cached.decisions.filter((d) => !d.demoted), cfg.model, { sessionId, turnId }) };
   }
 
   await emit(writer, sessionId, turnId, {
@@ -448,7 +589,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
 
   const clutterSettled = await Promise.allSettled(
     clutterBatches.map((batch, idx) =>
-      traced('email_signal.classify_clutter', { batchIndex: idx, batchSize: batch.length },
+      traced('email_signal.classify_clutter', { sessionId, turnId, model: cfg.model, batchIndex: idx, batchSize: batch.length },
         () => run(clutterAgent, `${frame}Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${slimForClutter(batch)}`))
         .catch((reason) => {
           void emit(writer, sessionId, turnId, { kind: 'error', agent: AGENT_NAMES.clutter, message: `clutter batch ${idx + 1}: ${formatRunError(reason)}` });
@@ -498,7 +639,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     }
     const settled = await Promise.allSettled(
       decisionBatches.map((batch, idx) =>
-        traced('email_signal.synthesize_decisions', { batchIndex: idx, batchSize: batch.length },
+        traced('email_signal.synthesize_decisions', { sessionId, turnId, model: cfg.model, batchIndex: idx, batchSize: batch.length },
           () => run(decisionAgent, `${frame}Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`))
           .catch((reason) => {
             void emit(writer, sessionId, turnId, { kind: 'error', agent: 'DecisionSynthesizerAgent', message: `synthesis batch ${idx + 1}: ${formatRunError(reason)}` });
@@ -528,7 +669,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
         drafts = deduped.merged;
       } else {
         const cons = await runSafe(() =>
-          traced('email_signal.consolidate_decisions', { drafts: drafts.length },
+          traced('email_signal.consolidate_decisions', { sessionId, turnId, model: cfg.model, drafts: drafts.length },
             () => run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`))
         );
         if (cons.status === 'fulfilled') {
@@ -546,7 +687,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   // only — demoted items are "likely past — handled?", so they must not colour
   // the day summary. Honest: '' when nothing is active. Never throws — a summary
   // failure degrades to '' (see summarizeDay).
-  const summary = await summarizeDay(decisions.filter((d) => !d.demoted), cfg.model);
+  const summary = await summarizeDay(decisions.filter((d) => !d.demoted), cfg.model, { sessionId, turnId });
 
   // Persist the derived result so the next identical scan is a cache hit — but
   // ONLY when every batch succeeded. Caching a partially-failed run would replay
@@ -885,8 +1026,8 @@ interface ChatInput {
 
 export async function runAgentChat(input: ChatInput): Promise<string> {
   const cfg = resolveConfig(input.settings);
-  ensureKey(input.settings);
   await ensureServerWeave(cfg.wandbApiKey, cfg.wandbProject).catch(() => {});
+  ensureKey(input.settings);
   const sessionId = nanoid();
   const { turnId, message, context, writer } = input;
 
@@ -909,7 +1050,7 @@ export async function runAgentChat(input: ChatInput): Promise<string> {
     : '';
 
   await emit(writer, sessionId, turnId, { kind: 'agent_start', agent: AGENT_NAMES.orchestrator });
-  const result = await traced('email_signal.chat', { message: message.slice(0, 200) },
+  const result = await traced('email_signal.chat', { sessionId, turnId, model: cfg.model, message: message.slice(0, 200) },
     () => run(orchestrator, `${message}${ctxBlob}`));
   const text = String(result.finalOutput ?? '');
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: AGENT_NAMES.orchestrator, message: `reply length ${text.length}` });

@@ -17,7 +17,7 @@ import { getMemoryStore } from '@/memory';
 import { isDryRun, isKillSwitchOn, USER_ID } from './runtime';
 import { recordProposed, appendLedger, getLedger } from '@/ledger/local-ledger';
 import { notifyScanResults } from '@/background/notifications';
-import { initWeave, recordTrace, startSession, getSessionId } from '@/weave/tracing';
+import { recordTrace, startSession, getSessionId } from '@/weave/tracing';
 import { AGENT_NAMES, AGENT_REGISTRY, AgentName } from './agent-defs';
 import {
   AgentContext,
@@ -58,7 +58,6 @@ export async function runOrchestratorTurn(input: OrchestratorTurnInput): Promise
 
   const turnId = nanoid();
   startSession();
-  await initWeave();
   await recordTrace({
     kind: 'turn_start',
     agent: AGENT_NAMES.orchestrator,

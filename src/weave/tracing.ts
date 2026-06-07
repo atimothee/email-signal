@@ -4,25 +4,20 @@ import { STORAGE_KEYS } from '@/common/constants';
 import { broadcastTrace } from './bridge';
 
 /**
- * W&B Weave integration.
+ * In-extension trace cockpit.
  *
- * Strategy:
- *  - In Node contexts (eval scripts, optional local server), we lazily load
- *    `weave` and call `weave.init({ project })`. The OpenAI Agents SDK has
- *    its own tracing processor we can attach (WeaveTracingProcessor).
- *  - In the extension service worker we CANNOT load the full Weave SDK
- *    (no Node APIs), so we record AgentTraceEvent records locally and
- *    stream them to the side panel. Anything labeled with the same
- *    sessionId is then re-uploaded server-side when a Node companion
- *    process runs (out of V1 scope, see roadmap).
+ * This module records `AgentTraceEvent`s in the extension (service worker /
+ * side panel), persists them to `chrome.storage` so the cockpit can re-hydrate
+ * on reload, broadcasts them to the side panel live, and fans them out to
+ * in-process subscribers (used by evals/tests).
  *
- * Either way every `recordTrace` call also pushes the event to the side
- * panel cockpit immediately.
+ * It does NOT talk to W&B. The extension build stubs out `weave` (no Node APIs
+ * in the browser), so real Weave traces are produced ONLY in the Node sidecar
+ * (`server/agents.ts`), which routes the OpenAI Agents SDK through a
+ * Weave-wrapped client. See the README's Observability section.
  */
 
 let sessionId = nanoid();
-let weaveReady = false;
-let weaveModule: typeof import('weave') | null = null;
 
 type TraceSubscriber = (event: AgentTraceEvent) => void;
 const subscribers = new Set<TraceSubscriber>();
@@ -35,22 +30,6 @@ const subscribers = new Set<TraceSubscriber>();
 export function subscribeTrace(cb: TraceSubscriber): () => void {
   subscribers.add(cb);
   return () => subscribers.delete(cb);
-}
-
-export async function initWeave(opts: { project?: string; apiKey?: string } = {}): Promise<void> {
-  if (typeof chrome !== 'undefined') return; // skip in extension
-  if (weaveReady) return;
-  try {
-    weaveModule = await import('weave');
-    const project = opts.project ?? process.env['WANDB_PROJECT'] ?? 'email-signal';
-    // The `weave` TS SDK exposes `init(projectName)` in current releases.
-    // We guard with `as any` to stay forward-compatible.
-    await (weaveModule as any).init(project);
-    weaveReady = true;
-  } catch (err) {
-    // Weave is optional; tracing falls back to local-only.
-    console.warn('[EmailSignal] weave init failed, falling back to local trace', err);
-  }
 }
 
 export function startSession(): string {
@@ -87,27 +66,9 @@ export async function recordTrace(
     const next = [...(cur ?? []), event].slice(-500);
     await chrome.storage.local.set({ [STORAGE_KEYS.traceEvents]: next });
   }
-  // 2. Push to Weave when available.
-  if (weaveReady && weaveModule) {
-    try {
-      // Minimal manual span — agents SDK integration handles richer traces.
-      await (weaveModule as any).log?.({
-        name: event.kind,
-        attributes: {
-          agent: event.agent,
-          tool: event.tool,
-          sessionId: event.sessionId,
-          turnId: event.turnId,
-          ...event.data,
-        },
-      });
-    } catch (err) {
-      console.debug('[EmailSignal] weave.log failed', err);
-    }
-  }
-  // 3. Broadcast to the side panel.
+  // 2. Broadcast to the side panel.
   await broadcastTrace(event);
-  // 4. Fan out to in-process subscribers (used in evals/tests).
+  // 3. Fan out to in-process subscribers (used in evals/tests).
   for (const cb of subscribers) {
     try {
       cb(event);
