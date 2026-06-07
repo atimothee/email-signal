@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react';
+import { STORAGE_KEYS } from '@/common/constants';
+import { isServerHealthy } from '@/common/server-client';
 import { useExtensionBridge, send } from './state/bridge';
 import { usePanelStore } from './state/store';
 import { DailyBriefTab } from './tabs/DailyBriefTab';
@@ -8,9 +10,11 @@ import { ChatTab } from './tabs/ChatTab';
 import { SettingsTab } from './tabs/SettingsTab';
 import { AgentActivityPanel } from './cockpit/AgentActivityPanel';
 import { AccountIndicator } from './AccountIndicator';
+import { SetupScreen } from './SetupScreen';
 
 type TabId = 'today' | 'cleanup' | 'chat';
 type Overlay = null | 'history' | 'settings';
+type GateState = 'pending' | 'setup' | 'ready';
 
 const TABS: ReadonlyArray<[TabId, string]> = [
   ['today', 'Today'],
@@ -18,7 +22,91 @@ const TABS: ReadonlyArray<[TabId, string]> = [
   ['chat', 'Chat'],
 ];
 
+/**
+ * App is the first-run setup gate (issue #56). It decides between the setup
+ * screen and the panel before any panel UI mounts, so a configured user never
+ * sees the setup screen flash. The actual panel body lives in `<Panel />`.
+ *
+ * Decision rules:
+ *   1. `STORAGE_KEYS.setupComplete === true` → render Panel immediately.
+ *   2. Otherwise probe `/health` + read the extension's OpenAI key. If the
+ *      sidecar is reachable AND a key is present (extension or server-side),
+ *      promote the user silently — sets `setupComplete` so future loads stay
+ *      instant, and renders Panel. This covers users who configured before
+ *      this gate existed.
+ *   3. Otherwise → render the SetupScreen.
+ */
 export function App(): JSX.Element {
+  const [gateState, setGateState] = useState<GateState>('pending');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const evaluate = async () => {
+      if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+        // Dev preview build (e.g. `build:sidepanel`) — there's no chrome.storage
+        // and no sidecar gate to enforce, so just render the panel.
+        if (!cancelled) setGateState('ready');
+        return;
+      }
+      const v = await chrome.storage.local.get([
+        STORAGE_KEYS.setupComplete,
+        STORAGE_KEYS.apiKey,
+      ]);
+      if (cancelled) return;
+      if (v[STORAGE_KEYS.setupComplete] === true) {
+        setGateState('ready');
+        return;
+      }
+      // Legacy fast-path: a returning user has the required config but no
+      // flag yet. Promote silently rather than asking them to re-onboard.
+      const extKey = (v[STORAGE_KEYS.apiKey] as string | undefined)?.trim() ?? '';
+      const probe = await isServerHealthy();
+      if (cancelled) return;
+      const serverHasKey = !!probe.info?.hasOpenAIKey;
+      if (probe.ok && (extKey || serverHasKey)) {
+        await chrome.storage.local.set({ [STORAGE_KEYS.setupComplete]: true });
+        if (!cancelled) setGateState('ready');
+        return;
+      }
+      if (!cancelled) setGateState('setup');
+    };
+
+    void evaluate();
+
+    // Re-evaluate when setupComplete flips (e.g. user clicks "Re-run setup"
+    // in Settings, which clears the flag).
+    if (typeof chrome === 'undefined' || !chrome.storage?.onChanged) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const onChanged = (
+      changes: { [k: string]: chrome.storage.StorageChange },
+      area: string
+    ) => {
+      if (area !== 'local') return;
+      if (changes[STORAGE_KEYS.setupComplete]) void evaluate();
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(onChanged);
+    };
+  }, []);
+
+  if (gateState === 'pending') {
+    // No-flash neutral placeholder — the visual weight matches `.setup-shell`
+    // so first paint never jolts the layout when the decision resolves.
+    return <div className="setup-shell" aria-hidden />;
+  }
+  if (gateState === 'setup') {
+    return <SetupScreen onComplete={() => setGateState('ready')} />;
+  }
+  return <Panel />;
+}
+
+function Panel(): JSX.Element {
   useExtensionBridge();
   const [tab, setTab] = useState<TabId>('today');
   const [overlay, setOverlay] = useState<Overlay>(null);

@@ -32,6 +32,14 @@ export const STORAGE_KEYS = {
    * this call. Set when a scan returns a `weaveCallId`; absent when Weave is off.
    */
   scanTrace: 'es.scan.trace.v1',
+  /**
+   * First-run setup completion flag (issue #56). Set to `true` once the user
+   * has cleared the onboarding gate with a working OpenAI key + reachable
+   * sidecar. Versioned so we can re-trigger setup if the required surface
+   * changes. Cleared by the Settings "Re-run setup" link without wiping the
+   * underlying keys.
+   */
+  setupComplete: 'es.setup.complete.v1',
 } as const;
 
 export const DEFAULTS = {

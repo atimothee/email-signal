@@ -124,6 +124,16 @@ export function SettingsTab(): JSX.Element {
     await chrome.storage.local.set({ [STORAGE_KEYS.serverUrl]: next });
   };
 
+  /**
+   * Re-trigger the first-run setup flow without wiping saved keys (issue #56).
+   * App.tsx listens for changes to `setupComplete` and swaps the panel back to
+   * the SetupScreen, so this is fire-and-forget.
+   */
+  const reRunSetup = async () => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    await chrome.storage.local.remove(STORAGE_KEYS.setupComplete);
+  };
+
   const checkServer = async () => {
     setServerStatus({ state: 'checking' });
     try {
@@ -226,6 +236,16 @@ export function SettingsTab(): JSX.Element {
               then click Recheck.
             </div>
           )}
+          <div style={{ marginTop: 8 }}>
+            <button
+              className="settings-rerun-link"
+              type="button"
+              onClick={() => void reRunSetup()}
+              title="Reopen the first-run setup screen. Keys stay saved."
+            >
+              Re-run setup
+            </button>
+          </div>
         </div>
         <button onClick={checkServer}>Recheck</button>
       </div>
