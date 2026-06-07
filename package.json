@@ -6,10 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --config vite.config.ts",
-    "build": "tsc --noEmit && vite build --config vite.config.ts",
+    "build": "tsc --noEmit && npm run typecheck:server && vite build --config vite.config.ts",
     "build:sidepanel": "vite build --config vite.sidepanel.config.ts",
     "build:all": "npm run build && npm run build:sidepanel",
     "typecheck": "tsc --noEmit",
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
     "server": "tsx watch server/index.ts",
     "server:once": "tsx server/index.ts",
     "evals": "tsx evals/run.ts",
