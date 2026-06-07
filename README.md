@@ -2,6 +2,8 @@
 
 > A Gmail / Outlook "signal extractor" — runs as a Chrome extension backed by a small local Node sidecar. Reads only what you can see in your webmail tab. Never deletes or sends mail. Every action passes through an approval card.
 
+**▶️ [Watch the demo](https://youtu.be/OzobLgGUAJI)**
+
 EmailSignal turns a noisy inbox into a short list of **Decisions** — the few things you actually need to act on today, each one synthesized from one *or more* related emails. It is the opposite of a second inbox: it does not restate what Gmail or Outlook already shows. Two recruiters waiting on you become **one** decision, not two cards. Newsletters, promotions, and notifications never become decisions at all — they flow to a separate Cleanup surface.
 
 EmailSignal does **not** use OAuth, the Gmail API, or Microsoft Graph. It reads the webmail DOM in a content script (Gmail on `mail.google.com`, Outlook on `outlook.live.com` / `outlook.office.com` / `outlook.office365.com`), so you stay in control of credentials and scope.
