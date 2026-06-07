@@ -1,7 +1,7 @@
 /// <reference types="chrome" />
 import { parseExtMessage } from '@schemas/index';
 import { sendToBackground } from '@/common/messaging';
-import { scanGmailDom, scanGmailInboxDeep } from '@/providers/gmail';
+import { scanGmailDom, scanGmailInboxPaginated } from '@/providers/gmail';
 import { scrapeAccountIdentity } from '@/providers/identity';
 import { DEFAULTS } from '@/common/constants';
 import { applyHighlight, removeHighlight } from './highlighter';
@@ -42,11 +42,14 @@ chrome.runtime.onMessage.addListener((raw) => {
         case 'bg/request_scan': {
           // A scan is a good moment to re-confirm the signed-in account.
           reportIdentity();
-          // Inbox scans go deep: scroll to load ~500 recent emails before we
-          // synthesize, reporting progress as we go. Thread/search stay shallow.
+          // Inbox scans go deep: Gmail paginates ~50/page, so we click through
+          // "Older" pages to gather ~500 recent emails, reporting progress as we
+          // go. This normally runs in a disposable background tab (Option B), so
+          // the page-flipping isn't visible in the user's own inbox.
+          // Thread/search stay shallow (single visible view).
           const scan =
             msg.source === 'inbox'
-              ? await scanGmailInboxDeep(DEFAULTS.deepScanTarget, (loaded) => {
+              ? await scanGmailInboxPaginated(DEFAULTS.deepScanTarget, (loaded) => {
                   void sendToBackground({
                     kind: 'content/scan_progress',
                     loaded,

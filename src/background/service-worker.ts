@@ -8,6 +8,124 @@ import { recordTrace } from '@/weave/tracing';
 import { AccountIdentitySchema } from '@schemas/index';
 import type { ExtMessage } from '@schemas/index';
 
+/**
+ * Disposable Gmail tabs we opened just to paginate-scan (Option B, brief-focus
+ * hybrid). Maps the scan tab's id -> the user's original tab to re-focus when
+ * we're done. When a scan_result arrives from one of these, we restore focus
+ * and close it.
+ */
+const bgScanTabs = new Map<number, number | undefined>();
+
+/** Resolve when a tab finishes loading, or reject after `timeoutMs`. */
+function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      clearTimeout(timer);
+      if (ok) resolve();
+      else reject(new Error('Background Gmail tab load timed out'));
+    };
+    const onUpdated = (id: number, info: chrome.tabs.TabChangeInfo) => {
+      if (id === tabId && info.status === 'complete') finish(true);
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    // It may already be complete before we attached the listener.
+    chrome.tabs.get(tabId).then(
+      (t) => {
+        if (t.status === 'complete') finish(true);
+      },
+      () => finish(false)
+    );
+    const timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+/**
+ * Normalize a Gmail tab URL into a clean inbox URL for the SAME account
+ * (/mail/u/N/). We scan from a fresh #inbox view so pagination starts at page 1.
+ */
+function buildInboxUrl(srcUrl: string | undefined): string {
+  const m = srcUrl?.match(/mail\.google\.com\/mail\/u\/(\d+)/);
+  const u = m?.[1] ?? '0';
+  return `https://mail.google.com/mail/u/${u}/#inbox`;
+}
+
+/** Best-effort: re-focus a tab, then remove the disposable scan tab. */
+async function restoreFocusAndClose(scanTabId: number, refocusTabId: number | undefined): Promise<void> {
+  if (refocusTabId !== undefined) {
+    try {
+      await chrome.tabs.update(refocusTabId, { active: true });
+    } catch {
+      /* original tab may be gone */
+    }
+  }
+  try {
+    await chrome.tabs.remove(scanTabId);
+  } catch {
+    /* already gone */
+  }
+}
+
+/**
+ * Open a disposable Gmail tab, briefly FOCUS it (so Gmail actually renders and
+ * honors page navigation — a hidden tab rejects both clicks and #p2 hash nav),
+ * let its content script paginate the inbox, then return focus to the user's
+ * original tab and close the scan tab (done in `content/scan_result`). The
+ * user's own Gmail tab is never paged. Requires an existing signed-in Gmail tab
+ * so we know the account + have a session.
+ */
+async function launchBackgroundScan(): Promise<void> {
+  const existing = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
+  if (existing.length === 0) {
+    await broadcastToPanel({
+      kind: 'bg/error',
+      message:
+        'No Gmail tab found. Open https://mail.google.com (and sign in), then click Scan now again.',
+    });
+    await recordTrace({ kind: 'error', message: 'No Gmail tab found for background scan' });
+    return;
+  }
+  const srcUrl = existing.find((t) => t.active)?.url ?? existing[0]?.url;
+  const scanUrl = buildInboxUrl(srcUrl);
+
+  // Remember which tab to return focus to once the scan finishes.
+  const [activeNow] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const refocusTabId = activeNow?.id;
+
+  // Show a real "reading" state immediately.
+  await broadcastToPanel({ kind: 'bg/turn_started', trigger: 'scan' });
+  await broadcastToPanel({ kind: 'bg/scan_progress', phase: 'reading', loaded: 0 });
+
+  let tabId: number | undefined;
+  try {
+    // active:true — the tab must be visible/foreground for Gmail to paginate.
+    const tab = await chrome.tabs.create({ url: scanUrl, active: true });
+    tabId = tab.id;
+    if (tabId === undefined) throw new Error('Could not open a Gmail scan tab');
+    bgScanTabs.set(tabId, refocusTabId);
+
+    await waitForTabComplete(tabId, DEFAULTS.bgTabReadyTimeoutMs);
+    // Small settle so Gmail's SPA can build the row DOM; the scanner also
+    // waits for rows itself, so this just trims the first retry.
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const ok = await sendToTab(tabId, { kind: 'bg/request_scan', source: 'inbox', background: true });
+    if (!ok) throw new Error('Scan tab content script unreachable');
+    // The scan now runs in that tab; content/scan_result finishes + closes it.
+  } catch (err) {
+    if (tabId !== undefined) {
+      bgScanTabs.delete(tabId);
+      await restoreFocusAndClose(tabId, refocusTabId);
+    }
+    await broadcastToPanel({ kind: 'bg/error', message: (err as Error).message });
+    await broadcastToPanel({ kind: 'bg/turn_done', ok: false });
+    await recordTrace({ kind: 'error', message: `Background scan failed: ${(err as Error).message}` });
+  }
+}
+
 // Open the side panel when the user clicks the toolbar icon.
 chrome.runtime.onInstalled.addListener(async () => {
   try {
@@ -15,22 +133,11 @@ chrome.runtime.onInstalled.addListener(async () => {
   } catch (err) {
     log.warn('sidePanel API unavailable', err);
   }
-  await chrome.alarms.create(ALARMS.periodicScan, {
-    periodInMinutes: DEFAULTS.notifyIntervalMin,
-  });
-});
-
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== ALARMS.periodicScan) return;
-  const killed = (await chrome.storage.local.get(STORAGE_KEYS.killSwitch))[
-    STORAGE_KEYS.killSwitch
-  ] as boolean | undefined;
-  if (killed) return;
-  // Ask the active Gmail tab (if any) for a fresh scan.
-  const tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
-  for (const t of tabs) {
-    if (t.id) await sendToTab(t.id, { kind: 'bg/request_scan', source: 'inbox' });
-  }
+  // Scans are on-demand only. A periodic background scan would have to focus a
+  // Gmail tab to paginate (Gmail won't paginate a hidden tab), which would steal
+  // focus on a timer — so we clear any previously-scheduled alarm and never
+  // create one. Users scan via the side panel's "Scan now".
+  await chrome.alarms.clear(ALARMS.periodicScan);
 });
 
 onMessage(async (msg, sender) => {
@@ -50,7 +157,28 @@ onMessage(async (msg, sender) => {
         return;
       }
       case 'content/scan_result': {
-        await runOrchestratorTurn({ trigger: 'scan', scan: msg.scan, sourceTabId: sender.tab?.id });
+        const tabId = sender.tab?.id;
+        const isBgScan = tabId !== undefined && bgScanTabs.has(tabId);
+        // Log here (persists) because the disposable scan tab closes below,
+        // taking its own console with it.
+        log.info('scan result', {
+          count: msg.scan.candidates.length,
+          background: isBgScan,
+          warnings: msg.scan.warnings,
+        });
+        // For a background scan, the disposable tab can't execute DOM actions
+        // (it's about to close), so don't hand it to the orchestrator as the
+        // action target — the user's real Gmail tab handles those.
+        await runOrchestratorTurn({
+          trigger: 'scan',
+          scan: msg.scan,
+          sourceTabId: isBgScan ? undefined : tabId,
+        });
+        if (isBgScan && tabId !== undefined) {
+          const refocusTabId = bgScanTabs.get(tabId);
+          bgScanTabs.delete(tabId);
+          await restoreFocusAndClose(tabId, refocusTabId);
+        }
         return;
       }
       case 'content/account_identity': {
@@ -95,51 +223,9 @@ onMessage(async (msg, sender) => {
         return;
       }
       case 'panel/request_scan': {
-        // Look first for the active Gmail tab; if there isn't one focused,
-        // fall back to ANY open Gmail tab so the user can leave Gmail in the
-        // background and still scan from the side panel.
-        let tabs = await chrome.tabs.query({
-          active: true,
-          url: 'https://mail.google.com/*',
-        });
-        if (tabs.length === 0) {
-          tabs = await chrome.tabs.query({ url: 'https://mail.google.com/*' });
-        }
-        if (tabs.length === 0) {
-          await broadcastToPanel({
-            kind: 'bg/error',
-            message:
-              'No Gmail tab found. Open https://mail.google.com in a tab, then click Scan now again.',
-          });
-          await recordTrace({
-            kind: 'error',
-            message: 'No Gmail tab found',
-          });
-          return;
-        }
-        let delivered = 0;
-        for (const t of tabs) {
-          if (t.id && (await sendToTab(t.id, { kind: 'bg/request_scan', source: 'inbox' }))) {
-            delivered++;
-          }
-        }
-        if (delivered > 0) {
-          // Announce the turn immediately so the panel shows a real "reading"
-          // state the instant the user clicks Scan — not a fake spinner.
-          await broadcastToPanel({ kind: 'bg/turn_started', trigger: 'scan' });
-          await broadcastToPanel({ kind: 'bg/scan_progress', phase: 'reading', loaded: 0 });
-        }
-        if (delivered === 0) {
-          await broadcastToPanel({
-            kind: 'bg/error',
-            message:
-              "Couldn't reach Gmail. Reload the Gmail tab (Cmd+R on mail.google.com) and try Scan again.",
-          });
-          await recordTrace({
-            kind: 'error',
-            message: 'Gmail tab found but content script unreachable',
-          });
-        }
+        // Option B: scan in a disposable, unfocused Gmail tab that paginates
+        // through Older pages, so the user's own inbox view is never disturbed.
+        await launchBackgroundScan();
         return;
       }
       case 'panel/highlight': {
