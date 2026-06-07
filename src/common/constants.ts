@@ -15,8 +15,15 @@ export const STORAGE_KEYS = {
   traceEvents: 'es.trace.v1',
   serverUrl: 'es.server.url.v1',
   account: 'es.account.v1',
-  /** Opt-in: fire Chrome notifications when a scan surfaces something. Default off. */
+  /** Opt-in master switch: fire Chrome notifications when a scan surfaces something. Default off. */
   notifyEnabled: 'es.notify.enabled.v1',
+  /**
+   * Per-category opt-out (both default ON when the master switch is on):
+   *  - notifyDecisions: high-priority "needs you today" / daily-brief nudge
+   *  - notifyClutter:   "unsubscribe batch ready" nudge
+   */
+  notifyDecisions: 'es.notify.decisions.v1',
+  notifyClutter: 'es.notify.clutter.v1',
   /** Dedup state so identical results don't re-notify (last signatures + brief date). */
   notifyState: 'es.notify.state.v1',
 } as const;

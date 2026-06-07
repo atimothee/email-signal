@@ -10,7 +10,10 @@
  *
  * What we notify on:
  *  - ≥1 high-priority (critical/high) decision surfaced  → "N need you today"
+ *    (this IS today's brief, so it doubles as the "daily brief ready" nudge and
+ *    is capped at most once per calendar day)
  *  - ≥ notifyUnsubBatchMin senders ready to clean up      → "unsubscribe batch ready"
+ * Each notification type can be turned off independently (per-category opt-out).
  * Identical results don't re-notify (signature dedup), and clicking opens the
  * side panel.
  */
@@ -24,6 +27,16 @@ const NOTIFY_ID_CLUTTER = 'email-signal:clutter';
 interface NotifyState {
   lastDecisionSig?: string;
   lastClutterSig?: string;
+  /** YYYY-MM-DD of the last decisions/brief notification — caps it to 1/day. */
+  lastBriefDate?: string;
+}
+
+/** Local calendar date as YYYY-MM-DD, used to cap the brief notification to 1/day. */
+function todayKey(): string {
+  const d = new Date();
+  const m = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
 function hasChrome(): boolean {
@@ -78,11 +91,17 @@ export async function notifyScanResults(
     const killed = await getBool(STORAGE_KEYS.killSwitch, DEFAULTS.killSwitch);
     if (killed) return;
 
+    // Per-category opt-out — both default ON when the master switch is on.
+    const decisionsOn = await getBool(STORAGE_KEYS.notifyDecisions, true);
+    const clutterOn = await getBool(STORAGE_KEYS.notifyClutter, true);
+
     const state = await getState();
     const next: NotifyState = { ...state };
 
     // 1) High-priority decisions — these ARE today's brief, so this doubles as
-    //    the "daily brief ready" nudge (no separate, redundant brief ping).
+    //    the "daily brief ready" nudge. Deduped by content signature AND capped
+    //    at most once per calendar day so a few same-day rescans stay quiet.
+    const today = todayKey();
     const high = decisions.filter(
       (d) => !d.demoted && (d.urgency === 'critical' || d.urgency === 'high')
     );
@@ -90,7 +109,12 @@ export async function notifyScanResults(
       .map((d) => d.id)
       .sort()
       .join(',');
-    if (high.length > 0 && decisionSig !== state.lastDecisionSig) {
+    if (
+      decisionsOn &&
+      high.length > 0 &&
+      decisionSig !== state.lastDecisionSig &&
+      state.lastBriefDate !== today
+    ) {
       const lead = high[0]?.title ?? 'Something needs you';
       const more = high.length > 1 ? ` +${high.length - 1} more` : '';
       create(
@@ -99,6 +123,7 @@ export async function notifyScanResults(
         `${lead}${more}`
       );
       next.lastDecisionSig = decisionSig;
+      next.lastBriefDate = today;
     }
 
     // 2) Unsubscribe batch ready.
@@ -108,6 +133,7 @@ export async function notifyScanResults(
       .sort()
       .join(',');
     if (
+      clutterOn &&
       unsubReady.length >= DEFAULTS.notifyUnsubBatchMin &&
       clutterSig !== state.lastClutterSig
     ) {

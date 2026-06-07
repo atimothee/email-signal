@@ -38,6 +38,8 @@ export function SettingsTab(): JSX.Element {
   const [wandbProject, setWandbProject] = useState('');
   const [wandbProjectSaved, setWandbProjectSaved] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState(false);
+  const [notifyDecisions, setNotifyDecisions] = useState(true);
+  const [notifyClutter, setNotifyClutter] = useState(true);
 
   // Load saved server URL + Settings-first config once.
   useEffect(() => {
@@ -50,6 +52,8 @@ export function SettingsTab(): JSX.Element {
         STORAGE_KEYS.wandbApiKey,
         STORAGE_KEYS.wandbProject,
         STORAGE_KEYS.notifyEnabled,
+        STORAGE_KEYS.notifyDecisions,
+        STORAGE_KEYS.notifyClutter,
       ])
       .then((v) => {
         const stored = v[STORAGE_KEYS.serverUrl] as string | undefined;
@@ -63,6 +67,9 @@ export function SettingsTab(): JSX.Element {
         const wp = v[STORAGE_KEYS.wandbProject] as string | undefined;
         if (wp) setWandbProject(wp);
         setNotifyEnabled(v[STORAGE_KEYS.notifyEnabled] === true);
+        // Per-category toggles default ON (only honored when the master is on).
+        setNotifyDecisions(v[STORAGE_KEYS.notifyDecisions] !== false);
+        setNotifyClutter(v[STORAGE_KEYS.notifyClutter] !== false);
       });
   }, []);
 
@@ -71,6 +78,17 @@ export function SettingsTab(): JSX.Element {
     setNotifyEnabled(next);
     if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
     await chrome.storage.local.set({ [STORAGE_KEYS.notifyEnabled]: next });
+  };
+
+  const toggleNotifyCategory = async (
+    key: typeof STORAGE_KEYS.notifyDecisions | typeof STORAGE_KEYS.notifyClutter,
+    current: boolean,
+    setter: (v: boolean) => void
+  ) => {
+    const next = !current;
+    setter(next);
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    await chrome.storage.local.set({ [key]: next });
   };
 
   const saveApiKey = async (next: string) => {
@@ -387,6 +405,45 @@ export function SettingsTab(): JSX.Element {
           {notifyEnabled ? 'ON' : 'OFF'}
         </button>
       </div>
+
+      {notifyEnabled && (
+        <>
+          <div className="settings-row" style={{ paddingLeft: 16 }}>
+            <div>
+              <div className="label">— Needs-you / daily brief</div>
+              <div className="hint">
+                When something high-priority surfaces. Doubles as your “daily brief ready”
+                nudge and fires at most once a day.
+              </div>
+            </div>
+            <button
+              className={notifyDecisions ? 'success' : 'ghost'}
+              onClick={() =>
+                toggleNotifyCategory(STORAGE_KEYS.notifyDecisions, notifyDecisions, setNotifyDecisions)
+              }
+            >
+              {notifyDecisions ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          <div className="settings-row" style={{ paddingLeft: 16 }}>
+            <div>
+              <div className="label">— Unsubscribe batch ready</div>
+              <div className="hint">
+                When several senders are queued and ready to clean up in a few clicks.
+              </div>
+            </div>
+            <button
+              className={notifyClutter ? 'success' : 'ghost'}
+              onClick={() =>
+                toggleNotifyCategory(STORAGE_KEYS.notifyClutter, notifyClutter, setNotifyClutter)
+              }
+            >
+              {notifyClutter ? 'ON' : 'OFF'}
+            </button>
+          </div>
+        </>
+      )}
 
       <div className="settings-row">
         <div>
