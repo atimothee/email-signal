@@ -18,6 +18,7 @@ import {
   setCachedClassification,
 } from './cache.js';
 import { reconcilePreferences } from './memory.js';
+import { dedupDecisions } from './dedup.js';
 
 const MODEL = process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini';
 
@@ -113,7 +114,7 @@ const DecisionOutSchema = z.object({
   confidence: z.number(),
 });
 const DecisionBatchSchema = z.object({ decisions: z.array(DecisionOutSchema) });
-type DecisionOut = z.infer<typeof DecisionOutSchema>;
+export type DecisionOut = z.infer<typeof DecisionOutSchema>;
 
 interface ClassifyInput {
   turnId: string;
@@ -332,14 +333,27 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
       }
     }
 
-    // Cross-batch consolidation when we have more than a short list.
+    // Cross-batch consolidation when we have more than a short list. Prefer
+    // vector dedup (embed + cluster + deterministic merge) — ~100× cheaper than
+    // a consolidation LLM call and reproducible. Fall back to the LLM merge only
+    // when embeddings are unavailable.
     if (drafts.length > MAX_DECISIONS) {
-      const cons = await runSafe(() =>
-        run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`)
-      );
-      if (cons.status === 'fulfilled') {
-        const merged = (cons.value.finalOutput as { decisions?: DecisionOut[] } | undefined)?.decisions;
-        if (merged && merged.length) drafts = merged;
+      const deduped = await dedupDecisions(drafts, input.apiKey);
+      if (deduped.clustered && deduped.merged.length) {
+        await emit(writer, sessionId, turnId, {
+          kind: 'agent_end',
+          agent: 'DecisionSynthesizerAgent',
+          message: `vector dedup: ${drafts.length} drafts → ${deduped.merged.length} (no LLM)`,
+        });
+        drafts = deduped.merged;
+      } else {
+        const cons = await runSafe(() =>
+          run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`)
+        );
+        if (cons.status === 'fulfilled') {
+          const merged = (cons.value.finalOutput as { decisions?: DecisionOut[] } | undefined)?.decisions;
+          if (merged && merged.length) drafts = merged;
+        }
       }
     }
   }
