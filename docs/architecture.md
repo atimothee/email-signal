@@ -18,7 +18,64 @@ The extension calls the sidecar over **SSE** (`classifyViaSidecar` / `chatViaSid
 [`src/agents/llm-runner.ts`](../src/agents/llm-runner.ts) → `POST /orchestrate/classify` and
 `/orchestrate/chat`), and the side panel talks to the **CopilotKit runtime** at `/copilotkit`.
 
-## Diagram
+## At a glance
+
+The active agents and the platforms each runtime depends on — OpenAI Agents SDK, OpenAI API,
+Redis, W&B Weave, and CopilotKit. (Jump to the [detailed view](#detailed-view) for every handoff
+edge and dormant agent.)
+
+```mermaid
+flowchart TB
+  GMAIL["Gmail tab<br/><i>visible DOM</i>"]
+
+  subgraph EXT["Chrome Extension · service worker"]
+    direction LR
+    ORCH["<b>Orchestrator</b>"]
+    SUPPORT["Memory · Policy<br/>Unsubscribe · Audit"]
+    PANEL["Side Panel UI"]
+  end
+
+  subgraph SIDE["Node Sidecar"]
+    direction LR
+    CLUT["Clutter<br/>Classifier"]
+    SYN["Decision<br/>Synthesizer"]
+    EXTRA["Day Summary ·<br/>Demotion Verifier"]
+  end
+
+  subgraph TOOLS["Platforms & Tools"]
+    direction LR
+    SDK(["OpenAI Agents SDK"])
+    OAI(["OpenAI API<br/>chat · embeddings"])
+    REDIS[("Redis<br/>cache · prefs")]
+    WEAVE[("W&B Weave<br/>tracing · evals")]
+    COPILOT(["CopilotKit<br/>chat UI"])
+  end
+
+  GMAIL -->|scan| ORCH
+  ORCH --> SUPPORT
+  ORCH ==>|SSE| CLUT
+  CLUT --> SYN --> EXTRA
+  SYN ==>|decisions| PANEL
+  PANEL <==>|chat| COPILOT
+
+  SIDE -.runs on.-> SDK
+  CLUT -.-> OAI
+  SYN -.-> OAI
+  SYN -.-> REDIS
+  SYN -.-> WEAVE
+  COPILOT -.-> OAI
+
+  classDef agent fill:#eef6ff,stroke:#3b82f6,color:#0b2545;
+  classDef ui fill:#f0fdf4,stroke:#22c55e,color:#14532d;
+  classDef tool fill:#fff7ed,stroke:#f97316,color:#7c2d12;
+  class ORCH,SUPPORT,CLUT,SYN,EXTRA agent;
+  class GMAIL,PANEL ui;
+  class SDK,OAI,REDIS,WEAVE,COPILOT tool;
+```
+
+## Detailed view
+
+Every agent (including dormant ones), each handoff edge, and the full infra wiring.
 
 ```mermaid
 flowchart TB
