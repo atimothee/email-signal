@@ -7,6 +7,7 @@ import { USER_ID } from '@agents/runtime';
 import { getMemoryStore } from '@/memory';
 import { appendLedger, getLedger } from '@/ledger/local-ledger';
 import { recordTrace } from '@/weave/tracing';
+import { registerNotificationClicks } from './notifications';
 import { AccountIdentitySchema } from '@schemas/index';
 import type { ExtMessage } from '@schemas/index';
 
@@ -141,6 +142,9 @@ chrome.runtime.onInstalled.addListener(async () => {
   // create one. Users scan via the side panel's "Scan now".
   await chrome.alarms.clear(ALARMS.periodicScan);
 });
+
+// Opt-in scan-completion notifications: clicking one opens the side panel (#1).
+registerNotificationClicks();
 
 onMessage(async (msg, sender) => {
   try {
