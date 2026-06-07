@@ -15,6 +15,13 @@ export const STORAGE_KEYS = {
   traceEvents: 'es.trace.v1',
   serverUrl: 'es.server.url.v1',
   account: 'es.account.v1',
+  /**
+   * One-shot flag: the legacy single-user ('local-user') memory + ledger has
+   * been absorbed into the first real connected account (issue #5 migration).
+   * Set once so the legacy data is never copied into a *second* account, which
+   * would leak account A's learned preferences into account B.
+   */
+  legacyMigrated: 'es.account.migrated.v1',
   /** Opt-in master switch: fire Chrome notifications when a scan surfaces something. Default off. */
   notifyEnabled: 'es.notify.enabled.v1',
   /**

@@ -3,7 +3,8 @@ import { onMessage, sendToTab } from '@/common/messaging';
 import { ALARMS, DEFAULTS, STORAGE_KEYS } from '@/common/constants';
 import { log } from '@/common/log';
 import { runOrchestratorTurn } from '@agents/orchestrator';
-import { USER_ID } from '@agents/runtime';
+import { getAccountId, accountIdFor } from '@agents/runtime';
+import { migrateLegacyAccount } from '@/common/account-migration';
 import { getMemoryStore } from '@/memory';
 import { appendLedger, getLedger } from '@/ledger/local-ledger';
 import { recordTrace } from '@/weave/tracing';
@@ -214,6 +215,9 @@ onMessage(async (msg, sender) => {
         // Persist so the panel can hydrate on open even before the next scan,
         // and broadcast for any panel that's already listening.
         await chrome.storage.local.set({ [STORAGE_KEYS.account]: msg.identity });
+        // First real inbox to connect inherits the pre-#5 single-user memory +
+        // ledger; guarded + idempotent, so calling on every identity ping is fine.
+        await migrateLegacyAccount(accountIdFor(msg.identity));
         await broadcastToPanel({ kind: 'bg/account_identity', identity: msg.identity });
         return;
       }
@@ -325,12 +329,12 @@ onMessage(async (msg, sender) => {
         return;
       }
       case 'panel/save_preference': {
-        // Write through the memory store (es.mem.prefs, keyed by USER_ID) — the
-        // SAME store the scan recalls from via listPreferences. Writing to the
-        // old flat preferences array was a dead end the scan never read, which
-        // is what made Mute / "ignore sender" no-ops.
+        // Write through the memory store (es.mem.prefs, keyed by the active
+        // account) — the SAME store the scan recalls from via listPreferences.
+        // Writing to the old flat preferences array was a dead end the scan
+        // never read, which is what made Mute / "ignore sender" no-ops.
         const store = await getMemoryStore();
-        await store.upsertPreference(USER_ID, msg.preference);
+        await store.upsertPreference(await getAccountId(), msg.preference);
         // A mute ("don't surface this sender again") is a strong negative signal
         // on the scan that surfaced it — capture it as feedback (issue #46).
         if (msg.preference.kind === 'ignored_sender') {
@@ -396,7 +400,7 @@ onMessage(async (msg, sender) => {
         };
         // Same memory store the scan recalls from — see panel/save_preference.
         const store = await getMemoryStore();
-        await store.upsertPreference(USER_ID, pref);
+        await store.upsertPreference(await getAccountId(), pref);
         await recordTrace({
           kind: 'approval_granted',
           message: msg.kind,

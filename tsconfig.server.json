@@ -1,0 +1,21 @@
+{
+  // Typecheck-only config for the Node sidecar under server/** (issue #65).
+  //
+  // The sidecar runs via `tsx` (transpile-only), so it is invisible to the main
+  // `tsc --noEmit` (whose `include` is src + evals). That let PR #63 merge a
+  // server that did not compile. This config closes the gap: `typecheck:server`
+  // runs `tsc -p tsconfig.server.json --noEmit` so any type error under
+  // server/** fails the build.
+  //
+  // server/*.ts cross-imports src/** via ESM `.js` specifiers, so src is in the
+  // program too; we keep "Bundler" moduleResolution (inherited) which resolves
+  // `.js` -> `.ts`. The sidecar is pure Node — no `chrome` globals — so we
+  // narrow `types` to ["node"] (the base config also pulls in "chrome").
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["server/**/*.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

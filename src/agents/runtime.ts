@@ -1,4 +1,5 @@
 import { STORAGE_KEYS } from '@/common/constants';
+import { AccountIdentitySchema } from '@schemas/index';
 
 /**
  * Resolve the OpenAI API key the user pasted in Settings. It is forwarded to the
@@ -76,4 +77,33 @@ export async function isKillSwitchOn(): Promise<boolean> {
   return false;
 }
 
-export const USER_ID = 'local-user'; // V1: single-user local extension
+/**
+ * Fallback account id used before any inbox is connected, and in Node contexts
+ * (evals/scripts) where there is no DOM to scrape. Was the only id pre-#5.
+ */
+export const USER_ID = 'local-user';
+
+/**
+ * Derive a stable, storage-safe account id from a connected mail identity
+ * (issue #5). `provider:email` is stable across sessions and unique per inbox,
+ * so memory/ledger partition cleanly without any OAuth/account-number scrape.
+ */
+export function accountIdFor(identity: { provider: string; email: string }): string {
+  return `${identity.provider}:${identity.email.trim().toLowerCase()}`;
+}
+
+/**
+ * The active account id that memory and the ledger are partitioned by. Reads
+ * the connected identity (es.account.v1, written by the content scraper); before
+ * any inbox is connected — or in Node eval contexts — falls back to USER_ID so
+ * everything keeps working single-user. Kill switch / dry-run stay global and do
+ * NOT go through here (safety defaults must not fragment per account).
+ */
+export async function getAccountId(): Promise<string> {
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    const v = await chrome.storage.local.get(STORAGE_KEYS.account);
+    const parsed = AccountIdentitySchema.safeParse(v[STORAGE_KEYS.account]);
+    return parsed.success ? accountIdFor(parsed.data) : USER_ID;
+  }
+  return process.env['EMAIL_SIGNAL_ACCOUNT_ID']?.trim() || USER_ID;
+}
