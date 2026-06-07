@@ -63,6 +63,9 @@ function getClient(): Promise<RedisLike | null> {
         lazyConnect: true,
         maxRetriesPerRequest: 1,
         enableOfflineQueue: false,
+        // Fail fast instead of ioredis's 10s default — a misconfigured/unreachable
+        // Redis must degrade the request path quickly, not stall it.
+        connectTimeout: 2000,
       });
       client.on('error', (err: Error) => {
         if (status !== 'error') {
