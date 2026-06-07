@@ -78,6 +78,35 @@ export function useGenerativeUiBindings(): void {
               key={d.id}
               decision={d}
               onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
+              // Wire the same dispositions the Today tab uses so Snooze /
+              // Mark handled / "Not for me" actually do something in chat too
+              // (issue #30). Removing the card from the transcript isn't
+              // possible here, but the messages still fire and persist.
+              onHandled={() => {
+                send({
+                  kind: 'panel/decision_action',
+                  action: 'handled',
+                  decisionId: d.id,
+                  emailIds: d.emailIds,
+                });
+              }}
+              onSnooze={() => {
+                send({
+                  kind: 'panel/decision_action',
+                  action: 'snooze',
+                  decisionId: d.id,
+                  emailIds: d.emailIds,
+                  untilMs: Date.now() + 24 * 60 * 60 * 1000,
+                });
+              }}
+              onCorrect={(text) =>
+                send({
+                  kind: 'panel/correct_finding',
+                  findingId: d.id,
+                  surface: 'priority',
+                  correction: text,
+                })
+              }
             />
           ))}
         </div>

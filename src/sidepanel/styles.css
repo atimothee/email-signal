@@ -861,6 +861,57 @@ code {
   animation: fade-swap 220ms var(--ease-out);
 }
 
+/* ⋯ overflow menu for low-frequency card dispositions (Snooze / Not for me) */
+.overflow-menu { position: relative; display: inline-flex; }
+.overflow-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  color: var(--text-faint);
+}
+.overflow-trigger:hover { color: var(--text-dim); }
+.overflow-trigger svg { display: block; }
+.overflow-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 168px;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  animation: fade-swap 160ms var(--ease-out);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.overflow-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+.overflow-item:hover { background: var(--surface-3); transform: none; }
+/* CorrectThis sits in the menu body; let its trigger fill the row like an item */
+.overflow-item-correct { padding: 1px; }
+.overflow-item-correct .correct { display: block; }
+.overflow-item-correct .correct-trigger {
+  width: 100%;
+  justify-content: flex-start;
+  background: transparent;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+.overflow-item-correct .correct-trigger:hover { background: var(--surface-3); }
+
 /* Effect preview block — "what will happen if you approve" */
 .effect-preview {
   margin-top: 10px;

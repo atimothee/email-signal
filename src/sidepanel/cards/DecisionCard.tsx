@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { Decision, DecisionTheme, DecisionUrgency } from '@schemas/index';
-import { CorrectThis } from './primitives';
+import { CorrectThis, OverflowMenu } from './primitives';
 
 interface Props {
   decision: Decision;
@@ -105,12 +105,34 @@ export function DecisionCard({
             Mark handled
           </button>
         )}
-        {onSnooze && (
-          <button className="ghost" onClick={() => dispatch(onSnooze)} title="Hide until tomorrow">
-            Snooze
-          </button>
+        {/* Low-frequency dispositions live one tap away so the card keeps a
+            single bright primary action. Only render the ⋯ when there's at
+            least one overflow item (preserves the optional-prop pattern). */}
+        {(onSnooze || onCorrect) && (
+          <OverflowMenu label="More actions">
+            {(close) => (
+              <>
+                {onSnooze && (
+                  <button
+                    className="overflow-item"
+                    role="menuitem"
+                    onClick={() => {
+                      close();
+                      dispatch(onSnooze);
+                    }}
+                  >
+                    Snooze
+                  </button>
+                )}
+                {onCorrect && (
+                  <div className="overflow-item-correct">
+                    <CorrectThis onSubmit={onCorrect} label="Not for me" />
+                  </div>
+                )}
+              </>
+            )}
+          </OverflowMenu>
         )}
-        {onCorrect && <CorrectThis onSubmit={onCorrect} label="Not for me" />}
       </div>
     </article>
   );
