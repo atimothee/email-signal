@@ -160,7 +160,6 @@ export function ClutterTab(): JSX.Element {
             key={category}
             category={category}
             rows={rows}
-            onUnsubscribe={approveUnsub}
             onMute={muteSender}
           />
         );

@@ -10,7 +10,6 @@ interface SenderRow {
 interface Props {
   category: ClutterCategory;
   rows: SenderRow[];
-  onUnsubscribe: (group: ClutterSenderGroup) => void;
   onMute: (group: ClutterSenderGroup) => void;
 }
 
@@ -44,7 +43,7 @@ const CATEGORY_TINT: Record<ClutterCategory, string> = {
  * noisy senders in that theme with counts, and offers the real, safe actions:
  * unsubscribe (per sender, gated by approval) and mute.
  */
-export function CleanupThemeCard({ category, rows, onUnsubscribe, onMute }: Props): JSX.Element {
+export function CleanupThemeCard({ category, rows, onMute }: Props): JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const totalMessages = rows.reduce((acc, r) => acc + r.group.count, 0);
   const unsubCount = rows.filter((r) => r.canUnsubscribe).length;
@@ -73,13 +72,16 @@ export function CleanupThemeCard({ category, rows, onUnsubscribe, onMute }: Prop
               </span>
             </div>
             <div className="cleanup-sender-actions">
-              {r.canUnsubscribe && (
-                <button className="primary slim" onClick={() => onUnsubscribe(r.group)}>
-                  Unsubscribe
-                </button>
-              )}
-              <button className="ghost slim" onClick={() => onMute(r.group)}>
-                Mute
+              <button
+                className="primary slim"
+                onClick={() => onMute(r.group)}
+                title={
+                  r.canUnsubscribe
+                    ? 'Unsubscribes at the source, marks these read, and hides this sender'
+                    : 'Marks these read and hides this sender from future scans'
+                }
+              >
+                {r.canUnsubscribe ? 'Unsubscribe & clear' : 'Mute'}
               </button>
             </div>
           </li>
