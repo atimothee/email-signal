@@ -189,6 +189,14 @@
     animation: shimmer 9s linear infinite;
   }
 
+  /* Inline-code chip. Matches the surface vocabulary used on /install. */
+  .es-code {
+    @apply rounded-md px-1.5 py-0.5 font-mono text-[0.875em];
+    background: rgb(var(--surface-2));
+    color: rgb(var(--text));
+    border: 1px solid rgb(var(--border) / 0.08);
+  }
+
   /* Soft hairline divider. */
   .es-hr {
     height: 1px;

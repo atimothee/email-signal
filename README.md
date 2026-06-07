@@ -106,7 +106,21 @@ Strict Zod schemas under [`src/schemas`](src/schemas) govern every boundary:
 
 ## Setup
 
-EmailSignal needs **two** things running: the sidecar and the loaded extension.
+EmailSignal always needs **two** things running: the loaded extension (in Chrome) and the sidecar (on your laptop). There are two install paths — pick the one that matches you.
+
+### For everyone (recommended): use the latest release
+
+If you just want to use EmailSignal, **follow the one-page guide in [`INSTALL.md`](INSTALL.md)**. It walks through:
+
+1. Downloading the latest `email-signal-extension-<x.y.z>.zip` from [GitHub Releases](https://github.com/atimothee/email-signal/releases/latest).
+2. Loading the unzipped folder in `chrome://extensions` (Developer mode → Load unpacked).
+3. Starting the local helper (`npm install` + `npm run server`) and pasting your OpenAI key.
+
+About 2 minutes the first time, no Chrome Web Store needed.
+
+### For developers / contributors: build from source
+
+If you're hacking on EmailSignal, build the extension from this repo instead of downloading a release:
 
 ```bash
 # 1. Clone, install
@@ -121,7 +135,7 @@ $EDITOR .env            # set OPENAI_API_KEY (or paste the key in the extension 
 npm run build:all
 ```
 
-### Loading the extension in Chrome
+#### Loading the extension in Chrome
 
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** (top right).
@@ -129,7 +143,7 @@ npm run build:all
 4. Pin the EmailSignal icon, open Gmail or Outlook, and click the icon to open the side panel.
 5. In **Settings**, confirm the sidecar URL (`http://localhost:3030`) and — if you didn't put it in `server/.env` — paste your **OpenAI API key**. The extension forwards the key to your local sidecar in the request body; it is never sent anywhere except OpenAI.
 
-### Developing — keep `dist/` fresh
+#### Developing — keep `dist/` fresh
 
 `build:all` is a **one-shot** build. Edit anything under `src/` afterward and `dist/`
 goes stale, so the loaded extension silently runs old code — e.g. the chat tab
@@ -264,11 +278,14 @@ public/
   icons/
 
 server/                        # the Node sidecar (all intelligence)
-  index.ts                     # Hono server: /health, /orchestrate/*, /copilotkit
+  index.ts                     # Hono server: /health, /orchestrate/*, /memory/*, /copilotkit
   agents.ts                    # ClutterClassifier + DecisionSynthesizer (OpenAI Agents SDK)
+  config.ts                    # env + Settings-forwarded config resolution
   cache.ts                     # Redis exact-match classify cache
   embeddings.ts                # batched OpenAI embeddings
   dedup.ts                     # vector clustering / decision dedup
+  vector-index.ts              # Redis vector index (Context Retriever / semantic recall)
+  agent-memory.ts              # Agent Memory Server client (two-tier working + long-term)
   memory.ts                    # server-side preference reconcile
   trace-bridge.ts              # SSE writer (streams trace events to the extension)
 
@@ -308,6 +325,8 @@ evals/
   fixtures/{categorization,safety,memory}.json
   {safety,memory,handoffs,synthesis,categorization}.eval.ts
   run.ts
+
+web/                           # Next.js marketing landing page (Vercel — emailsignal.vercel.app)
 
 vite.config.ts                 # CRXJS-powered MV3 build
 vite.sidepanel.config.ts       # standalone web build of the side panel
