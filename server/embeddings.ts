@@ -15,6 +15,26 @@
 
 const EMBED_MODEL = process.env['EMAIL_SIGNAL_EMBED_MODEL'] ?? 'text-embedding-3-small';
 
+/**
+ * Optional Weave tracing. We don't import agents.ts (that would create a cycle:
+ * agents → dedup → embeddings → agents), so we lazily reach for the already-
+ * initialized global weave client here. `weave.op` is a no-op when Weave wasn't
+ * initialized, so this stays a transparent pass-through without a key.
+ */
+let weaveMod: typeof import('weave') | null = null;
+async function tracedEmbed(input: unknown, fn: () => Promise<number[][]>): Promise<number[][]> {
+  if (!process.env['WANDB_API_KEY']) return fn();
+  try {
+    if (!weaveMod) weaveMod = await import('weave');
+    // weave.op is itself a no-op until weave.init has run (per its docs), so the
+    // env guard above is enough — no need to inspect the global client.
+    const wrapped = weaveMod.op(async (_input: unknown) => fn(), { name: 'email_signal.embed' });
+    return wrapped(input);
+  } catch {
+    return fn(); // tracing must never break embeddings
+  }
+}
+
 /** Resolve the key the same way ensureKey() does in agents.ts. */
 function resolveKey(override?: string): string {
   const key = override?.trim() || process.env['OPENAI_API_KEY'];
@@ -44,12 +64,14 @@ export function cosine(a: number[], b: number[]): number {
  */
 export async function embedTexts(texts: string[], apiKey?: string): Promise<number[][]> {
   if (texts.length === 0) return [];
-  const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey: resolveKey(apiKey) });
-  const res = await client.embeddings.create({ model: EMBED_MODEL, input: texts });
-  // The API returns data in request order, but sort by index to be safe.
-  const sorted = [...res.data].sort((a, b) => a.index - b.index);
-  return sorted.map((d) => l2normalize(d.embedding as number[]));
+  return tracedEmbed({ count: texts.length, model: EMBED_MODEL }, async () => {
+    const { default: OpenAI } = await import('openai');
+    const client = new OpenAI({ apiKey: resolveKey(apiKey) });
+    const res = await client.embeddings.create({ model: EMBED_MODEL, input: texts });
+    // The API returns data in request order, but sort by index to be safe.
+    const sorted = [...res.data].sort((a, b) => a.index - b.index);
+    return sorted.map((d) => l2normalize(d.embedding as number[]));
+  });
 }
 
 export const EMBED = { model: EMBED_MODEL };

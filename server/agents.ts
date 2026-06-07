@@ -28,6 +28,11 @@ const BATCH_SIZE = Number(process.env['EMAIL_SIGNAL_BATCH_SIZE'] ?? 25);
 const MAX_DECISIONS = 8;
 
 let weaveReady = false;
+/**
+ * The imported `weave` module, kept after a successful `init` so `traced()` can
+ * reach `weave.op` without re-importing. Null until (and unless) init succeeds.
+ */
+let weaveMod: typeof import('weave') | null = null;
 
 /**
  * Wraps a `run()` call so its outcome shape matches Promise.allSettled,
@@ -68,13 +73,47 @@ export async function initServerWeave(): Promise<void> {
   try {
     const weave = await import('weave');
     const project = process.env['WANDB_PROJECT'] ?? 'email-signal';
-    await (weave as any).init(project);
+    await weave.init(project);
+    weaveMod = weave;
     weaveReady = true;
     // eslint-disable-next-line no-console
     console.log(`[emailsignal-server] Weave initialized for project "${project}"`);
+    // eslint-disable-next-line no-console
+    console.log(`[emailsignal-server] Weave dashboard: ${weaveDashboardUrl()}`);
   } catch (err) {
     console.warn('[emailsignal-server] weave init failed', err);
   }
+}
+
+/**
+ * Best-effort Weave dashboard URL for the configured project. W&B traces live at
+ * `https://wandb.ai/<entity>/<project>/weave`. We don't reliably know the entity
+ * here (it's resolved from the API key at init time), so when WANDB_PROJECT is in
+ * `entity/project` form we use it verbatim; otherwise we omit the entity and let
+ * W&B resolve the default one. Returns null when tracing isn't configured.
+ */
+export function weaveDashboardUrl(): string | null {
+  if (!process.env['WANDB_API_KEY']) return null;
+  const project = process.env['WANDB_PROJECT'] ?? 'email-signal';
+  return `https://wandb.ai/${project}/weave`;
+}
+
+/**
+ * Wrap an async thunk as a named Weave op so it shows up in the W&B dashboard
+ * with its inputs/outputs. When Weave isn't initialized (no WANDB_API_KEY) this
+ * is a transparent pass-through: the thunk is just awaited, zero overhead.
+ *
+ * We `op()`-ify a fresh closure per call (cheap) rather than caching, because the
+ * captured `input` is what Weave records as the op's argument — giving each run
+ * site a distinct, inspectable trace.
+ */
+async function traced<T>(name: string, input: unknown, fn: () => Promise<T>): Promise<T> {
+  if (!weaveReady || !weaveMod) return fn();
+  // weave.op(fn, { name }) returns a wrapped fn that auto-tracks the call.
+  // Signature (from weave 0.7 op.d.ts):
+  //   op<T>(fn: T, options?: { name?: string; ... }): Op<(...args) => Promise<...>>
+  const wrapped = weaveMod.op(async (_input: unknown) => fn(), { name });
+  return wrapped(input);
 }
 
 /**
@@ -270,7 +309,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
 
   const clutterSettled = await Promise.allSettled(
     clutterBatches.map((batch, idx) =>
-      run(clutterAgent, `Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${slimForClutter(batch)}`)
+      traced('email_signal.classify_clutter', { batchIndex: idx, batchSize: batch.length },
+        () => run(clutterAgent, `Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${slimForClutter(batch)}`))
         .catch((reason) => {
           void emit(writer, sessionId, turnId, { kind: 'error', agent: AGENT_NAMES.clutter, message: `clutter batch ${idx + 1}: ${formatRunError(reason)}` });
           throw reason;
@@ -319,7 +359,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     }
     const settled = await Promise.allSettled(
       decisionBatches.map((batch, idx) =>
-        run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`)
+        traced('email_signal.synthesize_decisions', { batchIndex: idx, batchSize: batch.length },
+          () => run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`))
           .catch((reason) => {
             void emit(writer, sessionId, turnId, { kind: 'error', agent: 'DecisionSynthesizerAgent', message: `synthesis batch ${idx + 1}: ${formatRunError(reason)}` });
             throw reason;
@@ -348,7 +389,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
         drafts = deduped.merged;
       } else {
         const cons = await runSafe(() =>
-          run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`)
+          traced('email_signal.consolidate_decisions', { drafts: drafts.length },
+            () => run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`))
         );
         if (cons.status === 'fulfilled') {
           const merged = (cons.value.finalOutput as { decisions?: DecisionOut[] } | undefined)?.decisions;
@@ -546,7 +588,8 @@ export async function runAgentChat(input: ChatInput): Promise<string> {
     : '';
 
   await emit(writer, sessionId, turnId, { kind: 'agent_start', agent: AGENT_NAMES.orchestrator });
-  const result = await run(orchestrator, `${message}${ctxBlob}`);
+  const result = await traced('email_signal.chat', { message: message.slice(0, 200) },
+    () => run(orchestrator, `${message}${ctxBlob}`));
   const text = String(result.finalOutput ?? '');
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: AGENT_NAMES.orchestrator, message: `reply length ${text.length}` });
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
