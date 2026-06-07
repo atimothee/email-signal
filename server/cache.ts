@@ -1,6 +1,11 @@
 /// <reference types="node" />
 import { createHash } from 'node:crypto';
-import type { EmailCandidate, ClutterFinding, Decision } from '../src/schemas/index.js';
+import type {
+  EmailCandidate,
+  ClutterFinding,
+  Decision,
+  UserPreference,
+} from '../src/schemas/index.js';
 
 /**
  * Exact-match classification cache (server-side, Redis-backed).
@@ -86,17 +91,37 @@ function sha256(input: string): string {
 }
 
 /**
- * Deterministic key for an (account, email-set) pair. Decisions are synthesized
- * over the WHOLE set, so the set of ids is the cache identity — sorted so order
- * never matters. Account is hashed into a namespace so accounts never collide.
+ * Stable fingerprint of the preferences that feed synthesis. Folded into the
+ * cache key so that changing a preference (e.g. ignoring a sender) busts the
+ * cache instead of replaying decisions made under the old preferences.
  */
-export function classifyCacheKey(account: string | undefined, candidates: EmailCandidate[]): string {
+export function fingerprintPreferences(prefs: UserPreference[] | undefined): string {
+  if (!prefs || prefs.length === 0) return 'none';
+  const norm = prefs
+    .map((p) => `${p.kind}:${p.key}:${String(p.value)}`)
+    .sort()
+    .join('|');
+  return sha256(norm).slice(0, 16);
+}
+
+/**
+ * Deterministic key for an (account, email-set, preferences) triple. Decisions
+ * are synthesized over the WHOLE set under the user's preferences, so all three
+ * form the cache identity — ids sorted so order never matters. Account is hashed
+ * into a namespace so accounts never collide.
+ */
+export function classifyCacheKey(
+  account: string | undefined,
+  candidates: EmailCandidate[],
+  prefs?: UserPreference[]
+): string {
   const accountHash = account?.trim()
     ? sha256(account.trim().toLowerCase()).slice(0, 16)
     : 'anon';
   const ids = candidates.map((c) => c.id).sort();
   const idsHash = sha256(ids.join('\n')).slice(0, 40);
-  return `es:classify:${CACHE_VERSION}:${MODEL}:${accountHash}:${idsHash}`;
+  const prefHash = fingerprintPreferences(prefs);
+  return `es:classify:${CACHE_VERSION}:${MODEL}:${accountHash}:${idsHash}:${prefHash}`;
 }
 
 /** Returns the cached result for `key`, or null on miss / disabled / error. */
