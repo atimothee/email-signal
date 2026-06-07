@@ -30,6 +30,13 @@ export const DEFAULT_WANDB_PROJECT = 'email-signal';
 export interface ResolvedConfig {
   openaiKey: string | undefined;
   model: string;
+  /**
+   * Model for the judgment-heavy stages (decision synthesis, cross-batch
+   * consolidation, the demote/resolve verifier). Defaults to `model`, but can be
+   * pointed at a stronger model via `EMAIL_SIGNAL_SYNTHESIS_MODEL` so the cheap
+   * bulk classifier and the reasoning passes can use different tiers.
+   */
+  synthesisModel: string;
   wandbApiKey: string | undefined;
   wandbProject: string;
 }
@@ -40,9 +47,13 @@ export interface ResolvedConfig {
  * treated as absent so an empty Settings field never shadows server/.env.
  */
 export function resolveConfig(settings?: ClientSettings): ResolvedConfig {
+  const model = settings?.model?.trim() || process.env['EMAIL_SIGNAL_MODEL'] || DEFAULT_MODEL;
   return {
     openaiKey: settings?.apiKey?.trim() || process.env['OPENAI_API_KEY'] || undefined,
-    model: settings?.model?.trim() || process.env['EMAIL_SIGNAL_MODEL'] || DEFAULT_MODEL,
+    model,
+    // Falls back to the bulk model so existing setups are unchanged; set
+    // EMAIL_SIGNAL_SYNTHESIS_MODEL to give the reasoning passes a stronger tier.
+    synthesisModel: process.env['EMAIL_SIGNAL_SYNTHESIS_MODEL']?.trim() || model,
     wandbApiKey: settings?.wandbApiKey?.trim() || process.env['WANDB_API_KEY'] || undefined,
     wandbProject:
       settings?.wandbProject?.trim() || process.env['WANDB_PROJECT'] || DEFAULT_WANDB_PROJECT,

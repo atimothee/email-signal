@@ -82,6 +82,16 @@ export async function classifyViaSidecar(
   const decisions: Decision[] = [];
   let summary = '';
 
+  // The user's local IANA timezone (e.g. "America/New_York"), so the server's
+  // temporal frame resolves "today"/"tomorrow"/"the 15th" against the user's day,
+  // not the sidecar host's. Best-effort: undefined if the runtime can't report it.
+  let timezone: string | undefined;
+  try {
+    timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    timezone = undefined;
+  }
+
   for await (const ev of sseFetch('/orchestrate/classify', {
     turnId,
     candidates,
@@ -89,6 +99,7 @@ export async function classifyViaSidecar(
     settings,
     account,
     preferences,
+    timezone,
   })) {
     if (ev.type === 'trace') {
       const parsed = AgentTraceEventSchema.safeParse(ev.data);

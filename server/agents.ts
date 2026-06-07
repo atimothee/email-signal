@@ -16,21 +16,64 @@ import { resolveSenderName, domainOf } from '../src/common/sender.js';
 import { emit, SseWriter } from './trace-bridge.js';
 import {
   classifyCacheKey,
+  fingerprintContext,
   getCachedClassification,
   setCachedClassification,
 } from './cache.js';
 import { reconcilePreferences } from './memory.js';
-import { dedupDecisions } from './dedup.js';
+import { dedupDecisions, embedText } from './dedup.js';
+import { embedTexts } from './embeddings.js';
+import {
+  searchDecisions,
+  upsertDecisionVectors,
+  vectorIndexStatus,
+  type ScoredDecision,
+} from './vector-index.js';
 import {
   ClientSettings,
   resolveConfig,
   requireOpenAIKey,
 } from './config.js';
 
+/**
+ * How many prior decisions the Context Retriever injects into synthesis.
+ * Server tuning knob (env-only). 0 disables retrieval entirely.
+ */
+const CONTEXT_K = Number(process.env['EMAIL_SIGNAL_CONTEXT_K'] ?? 5);
+
 /** Max candidates per parallel classifier call. */
 const BATCH_SIZE = Number(process.env['EMAIL_SIGNAL_BATCH_SIZE'] ?? 25);
 /** Max decisions we ever return — the whole point is a short list. */
 const MAX_DECISIONS = 8;
+/**
+ * Per-email body characters fed to the model. Inbox rows only expose a ~120-char
+ * preview, but a thread scan captures the real message body (where the amount, the
+ * actual ask, and "no action needed" live). We send up to this many chars of the
+ * richest text we have. Default 512; EMAIL_SIGNAL_SEND_FULL_BODIES=true raises it
+ * to the full captured excerpt (the schema caps bodyExcerpt at 8192).
+ */
+const BODY_CHARS = process.env['EMAIL_SIGNAL_SEND_FULL_BODIES'] === 'true' ? 8192 : 512;
+/**
+ * Second-opinion pass: after deterministic demotion sinks "likely past — handled?"
+ * items, a verifier re-reads their actual bodies and can RESTORE any that are still
+ * genuinely live (an unpaid bill, an unanswered person). Burying a live item is the
+ * worst failure mode, so this guards against it.
+ *
+ * Latency-shaped: it's the one stage that adds a serial round-trip, so it (a) only
+ * fires on a cache MISS, (b) only when a demoted item is in a HIGH-STAKES theme
+ * (VERIFY_THEMES — where a wrong demotion actually costs the user), and (c) runs on
+ * the FAST model by default (EMAIL_SIGNAL_VERIFY_MODEL, falling back to the cheap
+ * bulk model, NOT the synthesis tier) since it's a constrained keep/restore call.
+ * On by default; set EMAIL_SIGNAL_VERIFY_DEMOTIONS=false to remove it entirely.
+ */
+const VERIFY_DEMOTIONS = process.env['EMAIL_SIGNAL_VERIFY_DEMOTIONS'] !== 'false';
+/**
+ * Themes where a mistaken demotion is genuinely costly — a still-owed bill, an
+ * unanswered person, a live security item, a real upcoming meeting. Demotions in
+ * other themes (admin/other/travel/job) are almost always correctly dead (passed
+ * events, already-charged receipts), so we don't pay a verifier round-trip on them.
+ */
+const VERIFY_THEMES = new Set<Decision['theme']>(['money', 'reply', 'security', 'schedule']);
 
 let weaveReady = false;
 /**
@@ -355,6 +398,12 @@ interface ClassifyInput {
    * decisions. Also folded into the cache key so a preference change busts it.
    */
   preferences?: UserPreference[];
+  /**
+   * IANA timezone of the user's browser (e.g. "America/New_York"), forwarded so
+   * the temporal frame's date + weekday reflect the user's local day rather than
+   * the server's. Absent → the frame falls back to the server's own zone.
+   */
+  timezone?: string;
 }
 
 export interface ClassifyOutput {
@@ -527,7 +576,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   // Anchor "now" once for the whole scan: the model's temporal frame and all
   // server-side recency/demotion math resolve against this single timestamp.
   const now = new Date();
-  const frame = temporalFrame(now);
+  const frame = temporalFrame(now, input.timezone);
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const friendlyName = (id: string): string => {
     const c = byId.get(id);
@@ -540,11 +589,27 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   // The merged set both feeds synthesis and fingerprints the cache key.
   const preferences = await reconcilePreferences(account, input.preferences ?? []);
 
+  // ── 0.5) Context Retriever: recall the account's most relevant PRIOR decisions ──
+  // Semantic KNN over the account's decision history so synthesis reasons over
+  // what the user already decided about mail like this, instead of re-deriving.
+  // Best-effort: [] when the vector index is disabled/unreachable — in which case
+  // the cache key below is byte-identical to the pre-Iris key. Its query embed is
+  // skipped entirely when the index is disabled, so no extra cost without Redis.
+  const priorContext = await retrievePriorContext(account, candidates, cfg.openaiKey);
+  const contextBlock = formatContextForSynthesis(priorContext);
+
   // ── 1) Exact-match cache ──
-  // A rescan of an unchanged inbox under unchanged preferences is the same
-  // (account, id-set, prefs) → replay the derived result instead of re-running
-  // ~20 OpenAI calls. Miss/disabled → fall straight through to the live pipeline.
-  const cacheKey = classifyCacheKey(account, candidates, preferences);
+  // A rescan of an unchanged inbox under unchanged preferences AND unchanged
+  // retrieved context is the same (account, id-set, prefs, ctx) → replay the
+  // derived result instead of re-running ~20 OpenAI calls. The retrieved-context
+  // fingerprint is folded in (like preferences) so evolving history busts the
+  // cache. Miss/disabled → fall straight through to the live pipeline.
+  const cacheKey = classifyCacheKey(
+    account,
+    candidates,
+    preferences,
+    fingerprintContext(priorContext.map((d) => d.id))
+  );
   const cached = await getCachedClassification(cacheKey);
   if (cached) {
     await emit(writer, sessionId, turnId, {
@@ -568,8 +633,11 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     message: `Classifying ${candidates.length} candidates`,
   });
 
+  // Bulk clutter labeling stays on the cheap model; the judgment-heavy synthesis
+  // (and consolidation/verification below) use the synthesis model, which can be a
+  // stronger tier via EMAIL_SIGNAL_SYNTHESIS_MODEL (defaults to the same model).
   const clutterAgent = buildClutterAgent(cfg.model);
-  const decisionAgent = buildDecisionAgent(cfg.model);
+  const decisionAgent = buildDecisionAgent(cfg.synthesisModel);
 
   // ── 1) Clutter, in parallel batches ──
   const clutterBatches = chunk(candidates, BATCH_SIZE);
@@ -603,15 +671,26 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   let degraded = clutterSettled.some((r) => r.status === 'rejected');
 
   const clutter: ClutterFinding[] = [];
+  let droppedClutter = 0;
   for (const r of clutterSettled) {
     if (r.status !== 'fulfilled') continue;
     const findings = (r.value.finalOutput as { findings?: ClutterFinding[] } | undefined)?.findings ?? [];
     for (const f of findings) {
       const hydrated = hydrateClutter(f, byId);
+      // hydrateClutter returns null when the model referenced an emailId that isn't
+      // in this scan — previously a silent loss. Count it so a model/scan mismatch
+      // (or a model hallucinating ids) is visible in the trace, not invisible.
       if (hydrated) clutter.push(hydrated);
+      else droppedClutter++;
     }
   }
-  await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: AGENT_NAMES.clutter, message: `clutter findings: ${clutter.length}` });
+  await emit(writer, sessionId, turnId, {
+    kind: 'agent_end',
+    agent: AGENT_NAMES.clutter,
+    message:
+      `clutter findings: ${clutter.length}` +
+      (droppedClutter > 0 ? ` (${droppedClutter} dropped — unknown emailId)` : ''),
+  });
 
   // ── 2) Synthesis over the SIGNAL candidates ──
   // Only DEFINITE noise is removed before synthesis. Ambiguous categories
@@ -627,6 +706,9 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   const prefsBlock = formatPreferencesForSynthesis(preferences);
 
   let drafts: DecisionOut[] = [];
+  // Captured from vector dedup (when it ran) so the index write path can reuse
+  // those embeddings instead of paying for a second embed call.
+  let dedupVectorsByText: Map<string, number[]> | undefined;
   if (signal.length > 0) {
     const decisionBatches = chunk(signal, BATCH_SIZE);
     for (let i = 0; i < decisionBatches.length; i++) {
@@ -640,7 +722,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     const settled = await Promise.allSettled(
       decisionBatches.map((batch, idx) =>
         traced('email_signal.synthesize_decisions', { sessionId, turnId, model: cfg.model, batchIndex: idx, batchSize: batch.length },
-          () => run(decisionAgent, `${frame}Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`))
+          () => run(decisionAgent, `${frame}Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}${contextBlock}\n${slimForDecisions(batch, friendlyName)}`))
           .catch((reason) => {
             void emit(writer, sessionId, turnId, { kind: 'error', agent: 'DecisionSynthesizerAgent', message: `synthesis batch ${idx + 1}: ${formatRunError(reason)}` });
             throw reason;
@@ -660,6 +742,7 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     // when embeddings are unavailable.
     if (drafts.length > MAX_DECISIONS) {
       const deduped = await dedupDecisions(drafts, cfg.openaiKey);
+      dedupVectorsByText = deduped.vectorsByText;
       if (deduped.clustered && deduped.merged.length) {
         await emit(writer, sessionId, turnId, {
           kind: 'agent_end',
@@ -680,8 +763,23 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     }
   }
 
-  const decisions = hydrateDecisions(drafts, byId, friendlyName, now);
+  let decisions = hydrateDecisions(drafts, byId, friendlyName, now);
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: 'DecisionSynthesizerAgent', message: `decisions: ${decisions.length}` });
+
+  // ── 3) Verifier: second opinion on what we DEMOTED ──────────────────────────
+  // The demotion above is deterministic and intentionally conservative, but a
+  // mis-read receipt or a stale-looking thread can sink something the user still
+  // owes. Re-read the actual bodies of the demoted items and restore any that are
+  // genuinely live. Best-effort: a failure degrades to the un-verified list.
+  if (VERIFY_DEMOTIONS && decisions.some((d) => d.demoted && VERIFY_THEMES.has(d.theme))) {
+    // Fast model by default — this is a constrained keep/restore judgment, not open
+    // synthesis, so it doesn't need (and shouldn't pay for) the synthesis tier.
+    const verifyModel = process.env['EMAIL_SIGNAL_VERIFY_MODEL']?.trim() || cfg.model;
+    decisions = await verifyDemotions(decisions, byId, verifyModel, frame, writer, {
+      sessionId,
+      turnId,
+    });
+  }
 
   // One-sentence "here's your day" line over the ACTIVE (non-demoted) decisions
   // only — demoted items are "likely past — handled?", so they must not colour
@@ -695,6 +793,15 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   const result: ClassifyOutput = { clutter, decisions, summary };
   if (!degraded) {
     await setCachedClassification(cacheKey, result);
+    // ── Context Retriever write path ──
+    // Persist the FINAL decisions to the vector index so future scans can recall
+    // them. Best-effort + additive: a no-op when the index is disabled, and never
+    // throws on the request path. Only on a clean run, mirroring the cache write —
+    // indexing a partial run would pollute future retrieval with stale context.
+    await indexDecisions(account, decisions, dedupVectorsByText, cfg.openaiKey, {
+      sessionId,
+      turnId,
+    });
   } else {
     await emit(writer, sessionId, turnId, {
       kind: 'agent_end',
@@ -705,6 +812,111 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
 
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
   return result;
+}
+
+// ── Context Retriever: retrieve + render + index prior decisions ──
+
+/** Cap on the rendered prior-context block so it never blows the prompt. */
+const CONTEXT_BLOCK_CHARS = 800;
+
+/**
+ * Retrieve the account's top-K most relevant PRIOR decisions for this batch.
+ *
+ * Embeds a compact representation of the current batch (subjects + sender names)
+ * and runs a KNN over the account's decision vectors. Best-effort and entirely
+ * skippable: returns [] (and makes NO embedding call) when CONTEXT_K is 0 or the
+ * vector index is disabled/erroring, so a deployment without Redis pays nothing
+ * and the cache key stays byte-identical to before.
+ */
+async function retrievePriorContext(
+  account: string | undefined,
+  candidates: EmailCandidate[],
+  apiKey: string | undefined
+): Promise<ScoredDecision[]> {
+  if (CONTEXT_K <= 0) return [];
+  const st = vectorIndexStatus().status;
+  if (st === 'disabled' || st === 'error') return [];
+  try {
+    // Compact query: the batch's subjects + friendly senders. Derived text only
+    // (no bodies), capped — this is the same kind of signal the clutter pass sees.
+    const queryText = candidates
+      .slice(0, BATCH_SIZE)
+      .map((c) => `${c.subject ?? ''} ${resolveSenderName(c.from, domainOf(c.from.email))}`.trim())
+      .join('\n')
+      .slice(0, 2000);
+    if (!queryText.trim()) return [];
+    const [vec] = await embedTexts([queryText], apiKey);
+    if (!vec) return [];
+    return await searchDecisions(account, vec, CONTEXT_K);
+  } catch {
+    return []; // retrieval is an enhancement, never a dependency
+  }
+}
+
+/**
+ * Render retrieved prior decisions into a compact, bounded synthesis block —
+ * the read-path twin of formatPreferencesForSynthesis. '' when none, so the
+ * prompt is unchanged when retrieval is empty/disabled.
+ */
+function formatContextForSynthesis(prior: ScoredDecision[]): string {
+  if (!prior.length) return '';
+  const lines: string[] = [];
+  let used = 0;
+  for (const d of prior) {
+    const line = `- ${d.title} (${d.urgency}) — ${d.why}`.replace(/\s+/g, ' ').trim();
+    if (used + line.length > CONTEXT_BLOCK_CHARS) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  if (!lines.length) return '';
+  return `\n\nRELEVANT PAST DECISIONS for this user (context only — do NOT restate them as new decisions; use them to stay consistent and avoid re-surfacing things already handled):\n${lines.join('\n')}`;
+}
+
+/**
+ * Persist the final decisions to the vector index. Reuses the dedup embeddings
+ * when present (keyed by embed text) so only decisions we haven't already
+ * embedded cost a call. Best-effort: a no-op when the index is disabled and
+ * never throws on the request path.
+ */
+async function indexDecisions(
+  account: string | undefined,
+  decisions: Decision[],
+  reuse: Map<string, number[]> | undefined,
+  apiKey: string | undefined,
+  _trace: { sessionId: string; turnId: string }
+): Promise<void> {
+  if (decisions.length === 0) return;
+  const st = vectorIndexStatus().status;
+  if (st === 'disabled' || st === 'error') return;
+  try {
+    // Resolve a vector per decision: reuse dedup's where the embed text matches,
+    // else batch-embed only the misses (usually all of them in the common,
+    // no-dedup path; none in the dedup path).
+    const texts = decisions.map((d) => embedText({ title: d.title, why: d.why }));
+    const vectors: (number[] | undefined)[] = texts.map((t) => reuse?.get(t));
+    const missIdx = vectors.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0);
+    if (missIdx.length) {
+      const embedded = await embedTexts(missIdx.map((i) => texts[i]!), apiKey);
+      if (embedded.length !== missIdx.length) return; // bail rather than misalign
+      missIdx.forEach((i, k) => (vectors[i] = embedded[k]));
+    }
+    if (vectors.some((v) => !v)) return;
+    await upsertDecisionVectors(
+      account,
+      decisions.map((d) => ({
+        id: d.id,
+        title: d.title,
+        why: d.why,
+        kind: d.theme,
+        urgency: d.urgency,
+        createdAt: d.receivedAt ?? new Date().toISOString(),
+        emailIds: d.emailIds,
+      })),
+      vectors as number[][]
+    );
+  } catch {
+    /* best-effort index write — never breaks the request path */
+  }
 }
 
 // ── preferences → synthesis directive ──
@@ -743,6 +955,20 @@ function formatPreferencesForSynthesis(prefs: UserPreference[]): string {
 
 // ── payload builders ──
 
+/**
+ * The richest text we have for an email, capped to BODY_CHARS. `bodyExcerpt` is the
+ * real message body when the scan saw an open thread; for plain inbox rows it just
+ * mirrors the snippet — so we take whichever is longer and never end up with LESS
+ * than the preview. Letting the model reason over the actual body (the amount, the
+ * ask, an in-thread "paid"/"thanks, done") is the single biggest accuracy lever
+ * here; the old payloads sent only a 240-char snippet and dropped the body entirely.
+ */
+function bodyForModel(c: EmailCandidate): string {
+  const body = c.bodyExcerpt ?? '';
+  const text = body.length >= c.snippet.length ? body : c.snippet;
+  return text.slice(0, BODY_CHARS);
+}
+
 function slimForClutter(batch: EmailCandidate[]): string {
   return JSON.stringify(
     batch.map((c) => ({
@@ -750,7 +976,7 @@ function slimForClutter(batch: EmailCandidate[]): string {
       threadId: c.threadId,
       from: c.from,
       subject: c.subject,
-      snippet: c.snippet.slice(0, 240),
+      body: bodyForModel(c),
       receivedAt: c.receivedAt ?? null,
       hasUnsubscribeLink: c.hasUnsubscribeLink,
     }))
@@ -764,7 +990,7 @@ function slimForDecisions(batch: EmailCandidate[], friendlyName: (id: string) =>
       from: friendlyName(c.id),
       domain: domainOf(c.from.email),
       subject: c.subject.slice(0, 200),
-      snippet: c.snippet.slice(0, 240),
+      body: bodyForModel(c),
       receivedAt: c.receivedAt ?? null,
       hasUnsubscribeLink: c.hasUnsubscribeLink,
     }))
@@ -778,12 +1004,24 @@ function slimForDecisions(batch: EmailCandidate[], friendlyName: (id: string) =>
  * receivedAt — not against the model's training cutoff. Defensive: a bad `now`
  * never throws.
  */
-function temporalFrame(now: Date): string {
+function temporalFrame(now: Date, timeZone?: string): string {
   let iso = '';
   let weekday = '';
   try {
-    iso = now.toISOString().slice(0, 10);
-    weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+    // Format the SAME instant in the USER's timezone for BOTH the date and the
+    // weekday, so the frame is internally consistent. The old code mixed a UTC
+    // date (toISOString) with the SERVER's local weekday (toLocaleDateString) —
+    // near midnight those disagree, and neither is the user's actual day, which
+    // skews every relative-date and overdue judgment by up to a day. `en-CA`
+    // yields YYYY-MM-DD. An unknown/invalid timeZone throws → caught → server zone.
+    const zone: Intl.DateTimeFormatOptions = timeZone ? { timeZone } : {};
+    iso = new Intl.DateTimeFormat('en-CA', {
+      ...zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+    weekday = new Intl.DateTimeFormat('en-US', { ...zone, weekday: 'long' }).format(now);
   } catch {
     /* leave blank — frame still degrades gracefully */
   }
@@ -1008,6 +1246,130 @@ function hydrateDecisions(
   const active = ranked.filter((d) => !d.demoted).slice(0, MAX_DECISIONS);
   const demotedList = ranked.filter((d) => d.demoted).slice(0, MAX_DEMOTED);
   return [...active, ...demotedList];
+}
+
+// ---- Demotion verifier (second opinion on what we sank) ----
+
+const VERIFY_INSTRUCTIONS = `You are EmailSignal's demotion verifier — the last safety check before the user sees their day.
+
+EmailSignal already sank the decisions below into a quiet "likely past — handled?" pile (they looked resolved, the moment passed, or a deadline is long gone). Your ONLY job: catch the ones sunk by MISTAKE that still genuinely need the user.
+
+You get each demoted decision WITH the full text of its underlying email(s). Read the BODIES, not just the title.
+
+RESTORE a decision (bring it back to the active list) ONLY when the body shows it is still LIVE:
+  - a real, still-UNPAID bill or obligation with no in-thread "paid"/"confirmed";
+  - a person still waiting on a reply the user hasn't sent;
+  - a deadline or event that is genuinely still in the FUTURE relative to TODAY.
+
+Do NOT restore:
+  - receipts, confirmations, orders, or already-charged transactions (the money already moved);
+  - anything with in-thread evidence it's done;
+  - a moment/event that has truly passed.
+
+Bias toward TRUSTING the demotion. Restoring a dead item is annoying noise; restore only on clear evidence it's still live. When in doubt, leave it demoted.
+
+Return STRICT JSON: { "restore": [ { "id": string, "reason": string } ] }. List ONLY the ids to bring back, each with a one-line reason grounded in the body. Return { "restore": [] } when every demotion was correct.`;
+
+const VerifyOutSchema = z.object({
+  restore: z.array(z.object({ id: z.string(), reason: z.string() })),
+});
+
+function buildVerifierAgent(model: string): Agent<unknown, typeof VerifyOutSchema> {
+  return new Agent({
+    name: 'DemotionVerifierAgent',
+    instructions: VERIFY_INSTRUCTIONS,
+    model,
+    outputType: VerifyOutSchema,
+  });
+}
+
+/**
+ * Re-read the bodies of the DEMOTED decisions and restore any the verifier judges
+ * still live. Best-effort and conservative: a failed/empty verification returns the
+ * input list unchanged. Restored items keep the original temporal ordering of the
+ * still-active items (a stable filter) and are appended after them, then re-capped.
+ */
+async function verifyDemotions(
+  decisions: Decision[],
+  byId: Map<string, EmailCandidate>,
+  model: string,
+  frame: string,
+  writer: SseWriter,
+  trace: { sessionId: string; turnId: string }
+): Promise<Decision[]> {
+  // Only re-check demotions in high-stakes themes; low-stakes demotions are almost
+  // always correctly dead and aren't worth a round-trip. This also keeps the
+  // payload (and so the call) small. Only these ids can be restored.
+  const demoted = decisions.filter((d) => d.demoted && VERIFY_THEMES.has(d.theme));
+  if (!demoted.length) return decisions;
+
+  const payload = demoted.map((d) => ({
+    id: d.id,
+    title: d.title,
+    why: d.why,
+    demotedReason: d.demotedReason ?? null,
+    theme: d.theme,
+    urgency: d.urgency,
+    windowType: d.windowType,
+    dueAt: d.dueAt ?? null,
+    receivedAt: d.receivedAt ?? null,
+    emails: d.emailIds
+      .map((id) => byId.get(id))
+      .filter((c): c is EmailCandidate => Boolean(c))
+      .map((c) => ({
+        from: resolveSenderName(c.from, domainOf(c.from.email)),
+        subject: c.subject,
+        body: bodyForModel(c),
+        receivedAt: c.receivedAt ?? null,
+      })),
+  }));
+
+  const result = await runSafe(() =>
+    traced(
+      'email_signal.verify_demotions',
+      { sessionId: trace.sessionId, turnId: trace.turnId, model, demoted: demoted.length },
+      () =>
+        run(
+          buildVerifierAgent(model),
+          `${frame}Review these DEMOTED decisions and return the ids to restore. Return {restore: [...]} only.\n${JSON.stringify(payload)}`
+        )
+    )
+  );
+  if (result.status !== 'fulfilled') {
+    await emit(writer, trace.sessionId, trace.turnId, {
+      kind: 'error',
+      agent: 'DemotionVerifierAgent',
+      message: `verify failed: ${formatRunError(result.reason)}`,
+    });
+    return decisions;
+  }
+
+  const restoreList =
+    (result.value.finalOutput as { restore?: Array<{ id: string }> } | undefined)?.restore ?? [];
+  const demotedIds = new Set(demoted.map((d) => d.id));
+  const restoreIds = new Set(restoreList.map((r) => r.id).filter((id) => demotedIds.has(id)));
+  if (!restoreIds.size) {
+    await emit(writer, trace.sessionId, trace.turnId, {
+      kind: 'agent_end',
+      agent: 'DemotionVerifierAgent',
+      message: `verified ${demoted.length} demoted — none restored`,
+    });
+    return decisions;
+  }
+
+  // Flip restored items to active. A stable filter preserves the original temporal
+  // ordering of the items that were already active; restored items follow them.
+  const flipped = decisions.map((d) =>
+    restoreIds.has(d.id) ? { ...d, demoted: false, demotedReason: null } : d
+  );
+  const active = flipped.filter((d) => !d.demoted).slice(0, MAX_DECISIONS);
+  const stillDemoted = flipped.filter((d) => d.demoted).slice(0, MAX_DEMOTED);
+  await emit(writer, trace.sessionId, trace.turnId, {
+    kind: 'agent_end',
+    agent: 'DemotionVerifierAgent',
+    message: `restored ${restoreIds.size} of ${demoted.length} demoted to active`,
+  });
+  return [...active, ...stillDemoted];
 }
 
 // ---- Chat ----
