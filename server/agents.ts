@@ -11,6 +11,11 @@ import {
 import { AGENT_NAMES, INSTRUCTIONS } from '../src/agents/agent-defs.js';
 import { resolveSenderName, domainOf } from '../src/common/sender.js';
 import { emit, SseWriter } from './trace-bridge.js';
+import {
+  classifyCacheKey,
+  getCachedClassification,
+  setCachedClassification,
+} from './cache.js';
 
 const MODEL = process.env['EMAIL_SIGNAL_MODEL'] ?? 'gpt-4.1-mini';
 
@@ -114,6 +119,12 @@ interface ClassifyInput {
   writer: SseWriter;
   /** Key forwarded from the extension Settings; overrides server env if set. */
   apiKey?: string;
+  /**
+   * Signed-in mail account (scraped from the Gmail DOM, no OAuth). Used only to
+   * namespace the classify cache so two accounts on one Redis never mix. Hashed
+   * before it touches Redis — never stored in the clear.
+   */
+  account?: string;
 }
 
 export interface ClassifyOutput {
@@ -190,12 +201,32 @@ function buildDecisionAgent(): Agent<unknown, typeof DecisionBatchSchema> {
 export async function runAgentClassification(input: ClassifyInput): Promise<ClassifyOutput> {
   ensureKey(input.apiKey);
   const sessionId = nanoid();
-  const { turnId, candidates, writer } = input;
+  const { turnId, candidates, writer, account } = input;
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const friendlyName = (id: string): string => {
     const c = byId.get(id);
     return c ? resolveSenderName(c.from, domainOf(c.from.email)) : 'Unknown sender';
   };
+
+  // ── 0) Exact-match cache ──
+  // A rescan of an unchanged inbox is the same (account, id-set) → replay the
+  // derived result instead of re-running ~20 OpenAI calls. Miss/disabled →
+  // fall straight through to the live pipeline below.
+  const cacheKey = classifyCacheKey(account, candidates);
+  const cached = await getCachedClassification(cacheKey);
+  if (cached) {
+    await emit(writer, sessionId, turnId, {
+      kind: 'session_start',
+      message: `Reusing cached analysis of ${candidates.length} emails`,
+    });
+    await emit(writer, sessionId, turnId, {
+      kind: 'agent_end',
+      agent: AGENT_NAMES.orchestrator,
+      message: `cache hit — ${cached.decisions.length} decision(s), ${cached.clutter.length} clutter (no LLM calls)`,
+    });
+    await emit(writer, sessionId, turnId, { kind: 'session_end' });
+    return cached;
+  }
 
   await emit(writer, sessionId, turnId, {
     kind: 'session_start',
@@ -293,8 +324,13 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
 
   const decisions = hydrateDecisions(drafts, byId, friendlyName);
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: 'DecisionSynthesizerAgent', message: `decisions: ${decisions.length}` });
+
+  // Persist the derived result so the next identical scan is a cache hit.
+  const result: ClassifyOutput = { clutter, decisions };
+  await setCachedClassification(cacheKey, result);
+
   await emit(writer, sessionId, turnId, { kind: 'session_end' });
-  return { clutter, decisions };
+  return result;
 }
 
 // ── payload builders ──
