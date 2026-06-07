@@ -28,6 +28,11 @@ const BATCH_SIZE = Number(process.env['EMAIL_SIGNAL_BATCH_SIZE'] ?? 25);
 const MAX_DECISIONS = 8;
 
 let weaveReady = false;
+/**
+ * The imported `weave` module, kept after a successful `init` so `traced()` can
+ * reach `weave.op` without re-importing. Null until (and unless) init succeeds.
+ */
+let weaveMod: typeof import('weave') | null = null;
 
 /**
  * Wraps a `run()` call so its outcome shape matches Promise.allSettled,
@@ -68,13 +73,47 @@ export async function initServerWeave(): Promise<void> {
   try {
     const weave = await import('weave');
     const project = process.env['WANDB_PROJECT'] ?? 'email-signal';
-    await (weave as any).init(project);
+    await weave.init(project);
+    weaveMod = weave;
     weaveReady = true;
     // eslint-disable-next-line no-console
     console.log(`[emailsignal-server] Weave initialized for project "${project}"`);
+    // eslint-disable-next-line no-console
+    console.log(`[emailsignal-server] Weave dashboard: ${weaveDashboardUrl()}`);
   } catch (err) {
     console.warn('[emailsignal-server] weave init failed', err);
   }
+}
+
+/**
+ * Best-effort Weave dashboard URL for the configured project. W&B traces live at
+ * `https://wandb.ai/<entity>/<project>/weave`. We don't reliably know the entity
+ * here (it's resolved from the API key at init time), so when WANDB_PROJECT is in
+ * `entity/project` form we use it verbatim; otherwise we omit the entity and let
+ * W&B resolve the default one. Returns null when tracing isn't configured.
+ */
+export function weaveDashboardUrl(): string | null {
+  if (!process.env['WANDB_API_KEY']) return null;
+  const project = process.env['WANDB_PROJECT'] ?? 'email-signal';
+  return `https://wandb.ai/${project}/weave`;
+}
+
+/**
+ * Wrap an async thunk as a named Weave op so it shows up in the W&B dashboard
+ * with its inputs/outputs. When Weave isn't initialized (no WANDB_API_KEY) this
+ * is a transparent pass-through: the thunk is just awaited, zero overhead.
+ *
+ * We `op()`-ify a fresh closure per call (cheap) rather than caching, because the
+ * captured `input` is what Weave records as the op's argument — giving each run
+ * site a distinct, inspectable trace.
+ */
+async function traced<T>(name: string, input: unknown, fn: () => Promise<T>): Promise<T> {
+  if (!weaveReady || !weaveMod) return fn();
+  // weave.op(fn, { name }) returns a wrapped fn that auto-tracks the call.
+  // Signature (from weave 0.7 op.d.ts):
+  //   op<T>(fn: T, options?: { name?: string; ... }): Op<(...args) => Promise<...>>
+  const wrapped = weaveMod.op(async (_input: unknown) => fn(), { name });
+  return wrapped(input);
 }
 
 /**
@@ -140,6 +179,12 @@ interface ClassifyInput {
 export interface ClassifyOutput {
   clutter: ClutterFinding[];
   decisions: Decision[];
+  /**
+   * One-sentence "here's your day" line in the user's voice, synthesized across
+   * the FINAL decisions. Always a string: '' when there are no decisions or when
+   * the summary call fails (we never let a summary error break the decisions flow).
+   */
+  summary: string;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -197,6 +242,69 @@ function buildDecisionAgent(): Agent<unknown, typeof DecisionBatchSchema> {
   });
 }
 
+const DAY_SUMMARY_INSTRUCTIONS = `You write ONE sentence — the user's "here's your day" line — from the SHORT list of decisions (things they actually need to act on) below.
+
+Speak in the user's own voice, plain and natural, the way a sharp assistant would in one breath. Synthesize across the whole list; pull out what's heaviest (money owed, someone waiting, a deadline) rather than listing everything.
+
+Return STRICT JSON: { "summary": string }.
+
+Examples of the tone:
+  - "Three money decisions and a recruiter's been waiting two days — the rest is quiet."
+  - "Just Maya waiting on a lunch reply."
+  - "A bill due Friday and an interview to confirm."
+
+HARD RULES:
+  - ONE sentence, ≤ 160 characters.
+  - Plain language. No agent names, no jargon, no "the user", no robotic counts like "You have 3 items".
+  - Summarize only these DECISIONS — never mention newsletters, promotions, or clutter.
+  - Be HONEST: never invent activity or pad. If the list is short, the line is short.`;
+
+const DaySummarySchema = z.object({ summary: z.string() });
+
+function buildDaySummaryAgent(): Agent<unknown, typeof DaySummarySchema> {
+  return new Agent({
+    name: 'DaySummaryAgent',
+    instructions: DAY_SUMMARY_INSTRUCTIONS,
+    model: MODEL,
+    outputType: DaySummarySchema,
+  });
+}
+
+/**
+ * One small LLM call over the FINAL decision list to produce the "here's your
+ * day" line. Honest by construction: 0 decisions → '' (no call, no invented
+ * activity). Fully defensive — any failure degrades to '' and never throws, so a
+ * summary problem can never break the decisions flow.
+ */
+async function summarizeDay(decisions: Decision[]): Promise<string> {
+  if (decisions.length === 0) return '';
+  try {
+    const slim = decisions.map((d) => ({
+      title: d.title,
+      why: d.why,
+      theme: d.theme,
+      urgency: d.urgency,
+      senders: d.senders,
+      dueAt: d.dueAt,
+    }));
+    const result = await traced(
+      'email_signal.day_summary',
+      { decisions: decisions.length },
+      () =>
+        run(
+          buildDaySummaryAgent(),
+          `Write the user's one-sentence day summary from these decisions. Return {summary: string} only.\n${JSON.stringify(slim)}`
+        )
+    );
+    const raw = (result.finalOutput as { summary?: unknown } | undefined)?.summary;
+    if (typeof raw !== 'string') return '';
+    // Enforce the contract bounds defensively (one line, ≤160 chars).
+    return raw.replace(/\s+/g, ' ').trim().slice(0, 160);
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Full classification + synthesis, entirely server-side via the Agents SDK.
  *
@@ -241,7 +349,9 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
       message: `cache hit — ${cached.decisions.length} decision(s), ${cached.clutter.length} clutter (no LLM calls)`,
     });
     await emit(writer, sessionId, turnId, { kind: 'session_end' });
-    return cached;
+    // The cache stores only { clutter, decisions }; recompute the one-sentence
+    // day summary over the cached decisions (cheap, honest, degrades to '').
+    return { ...cached, summary: await summarizeDay(cached.decisions) };
   }
 
   await emit(writer, sessionId, turnId, {
@@ -270,7 +380,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
 
   const clutterSettled = await Promise.allSettled(
     clutterBatches.map((batch, idx) =>
-      run(clutterAgent, `Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${slimForClutter(batch)}`)
+      traced('email_signal.classify_clutter', { batchIndex: idx, batchSize: batch.length },
+        () => run(clutterAgent, `Classify these EmailCandidates and return {findings: ClutterFinding[]} only.\n${slimForClutter(batch)}`))
         .catch((reason) => {
           void emit(writer, sessionId, turnId, { kind: 'error', agent: AGENT_NAMES.clutter, message: `clutter batch ${idx + 1}: ${formatRunError(reason)}` });
           throw reason;
@@ -319,7 +430,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
     }
     const settled = await Promise.allSettled(
       decisionBatches.map((batch, idx) =>
-        run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`)
+        traced('email_signal.synthesize_decisions', { batchIndex: idx, batchSize: batch.length },
+          () => run(decisionAgent, `Synthesize decisions from these emails. Return {decisions: Decision[]} only.${prefsBlock}\n${slimForDecisions(batch, friendlyName)}`))
           .catch((reason) => {
             void emit(writer, sessionId, turnId, { kind: 'error', agent: 'DecisionSynthesizerAgent', message: `synthesis batch ${idx + 1}: ${formatRunError(reason)}` });
             throw reason;
@@ -348,7 +460,8 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
         drafts = deduped.merged;
       } else {
         const cons = await runSafe(() =>
-          run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`)
+          traced('email_signal.consolidate_decisions', { drafts: drafts.length },
+            () => run(decisionAgent, `These draft decisions came from different batches of ONE inbox. Merge duplicates/related ones (same sender + same ask), keep the union of emailIds, and return the TOP ${MAX_DECISIONS} as {decisions: Decision[]}. Drop weak ones rather than padding.\n${JSON.stringify(drafts)}`))
         );
         if (cons.status === 'fulfilled') {
           const merged = (cons.value.finalOutput as { decisions?: DecisionOut[] } | undefined)?.decisions;
@@ -361,10 +474,14 @@ export async function runAgentClassification(input: ClassifyInput): Promise<Clas
   const decisions = hydrateDecisions(drafts, byId, friendlyName);
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: 'DecisionSynthesizerAgent', message: `decisions: ${decisions.length}` });
 
+  // One-sentence "here's your day" line over the FINAL decisions. Honest: '' when
+  // there are none. Never throws — a summary failure degrades to '' (see summarizeDay).
+  const summary = await summarizeDay(decisions);
+
   // Persist the derived result so the next identical scan is a cache hit — but
   // ONLY when every batch succeeded. Caching a partially-failed run would replay
   // an under-classified inbox for the whole TTL.
-  const result: ClassifyOutput = { clutter, decisions };
+  const result: ClassifyOutput = { clutter, decisions, summary };
   if (!degraded) {
     await setCachedClassification(cacheKey, result);
   } else {
@@ -546,7 +663,8 @@ export async function runAgentChat(input: ChatInput): Promise<string> {
     : '';
 
   await emit(writer, sessionId, turnId, { kind: 'agent_start', agent: AGENT_NAMES.orchestrator });
-  const result = await run(orchestrator, `${message}${ctxBlob}`);
+  const result = await traced('email_signal.chat', { message: message.slice(0, 200) },
+    () => run(orchestrator, `${message}${ctxBlob}`));
   const text = String(result.finalOutput ?? '');
   await emit(writer, sessionId, turnId, { kind: 'agent_end', agent: AGENT_NAMES.orchestrator, message: `reply length ${text.length}` });
   await emit(writer, sessionId, turnId, { kind: 'session_end' });

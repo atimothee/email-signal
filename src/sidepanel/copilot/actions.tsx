@@ -12,7 +12,9 @@ import { ActionLedgerTable } from '../cards/ActionLedgerTable';
 import { AgentTraceTimeline } from '../cards/AgentTraceTimeline';
 import { BatchActionReviewPanel } from '../cards/BatchActionReviewPanel';
 import { Skeleton, ErrorState } from '../cards/primitives';
+import { normalizeProposedAction, isActionType, type LooseAction } from '@agents/action-factory';
 import type { Decision, ProposedAction } from '@schemas/index';
+import { nanoid } from 'nanoid';
 
 /**
  * Register every card component as a CopilotKit generative-UI action so the
@@ -148,6 +150,20 @@ export function useGenerativeUiBindings(): void {
         <div className="gen-ui-slot">
           <ClutterSenderGroupCard
             group={group}
+            onIgnore={() =>
+              send({
+                kind: 'panel/save_preference',
+                preference: {
+                  id: nanoid(),
+                  kind: 'ignored_sender',
+                  key: group.senderDomain.toLowerCase(),
+                  value: group.senderDomain.toLowerCase(),
+                  source: 'agent_suggested_then_approved',
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                },
+              })
+            }
             onCorrect={(text) =>
               send({
                 kind: 'panel/correct_finding',
@@ -214,13 +230,31 @@ export function useGenerativeUiBindings(): void {
   useCopilotAction({
     name: 'request_action_approval',
     description:
-      'Render an approval card for a single proposed action and wait for the user. ' +
+      'Render an approval card for ONE action you want to take on the inbox and WAIT for the ' +
+      'user. Use this for any real action (open_email, mark_read, archive, click_unsubscribe) — ' +
+      'never claim in plain text that you opened/marked/archived anything; you must go through ' +
+      'this card. Pass `action` as { type, decisionId, title, rationale }. `decisionId` must be ' +
+      "the id of one of Today's decisions (so the app can locate the email); the app fills in " +
+      'risk, reversibility and the Gmail selector for you. ' +
       'Returns one of: "approve_once", "reject", "always_suggest", "never_suggest".',
     parameters: [{ name: 'action', type: 'object', required: true }],
     renderAndWaitForResponse: ({ status, args, respond }) => {
       if (status === 'inProgress') return <Skeleton card lines={3} />;
-      const action = args?.action as ProposedAction | undefined;
-      if (!action) return <ErrorState message="Proposed action missing." />;
+      const raw = args?.action as (LooseAction & { decisionId?: string }) | undefined;
+      if (!raw || !isActionType(raw.type)) {
+        return <ErrorState message="I couldn't build a valid action for that." />;
+      }
+      // The model supplies a loose shape; normalize it into a gate-valid action
+      // with a real risk level and a Gmail selector resolved from the decision.
+      let action: ProposedAction;
+      try {
+        const loose: LooseAction = raw.decisionId
+          ? { ...raw, params: { ...(raw.params ?? {}), decisionId: raw.decisionId } }
+          : raw;
+        action = normalizeProposedAction(loose, decisions);
+      } catch {
+        return <ErrorState message="I couldn't build a valid action for that." />;
+      }
       const patternKey =
         (action.params?.['senderDomain'] as string | undefined) ??
         (action.params?.['domain'] as string | undefined) ??
@@ -230,17 +264,11 @@ export function useGenerativeUiBindings(): void {
           <ApprovalActionCard
             action={action}
             onApprove={() => {
-              send({
-                kind: 'panel/approve_action',
-                approval: {
-                  proposedActionId: action.id,
-                  status: 'approved',
-                  approvedAt: new Date().toISOString(),
-                  approvedBy: 'user',
-                },
-              });
+              // Chat-proposed actions aren't in the ledger yet — execute_action
+              // records, gates, runs and logs the whole thing in the background.
+              send({ kind: 'panel/execute_action', action });
               removeProposedAction(action.id);
-              respond?.('approve_once');
+              respond?.('approved — running it now; the result will show in your activity log.');
             }}
             onReject={() => {
               send({ kind: 'panel/reject_action', proposedActionId: action.id });

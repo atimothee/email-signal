@@ -29,6 +29,8 @@ interface PanelState {
   scanStatus: ScanStatus;
   scanProgress: { loaded: number; target: number };
   decisions: Decision[];
+  /** One-sentence "here's your day" synthesis, or null. */
+  daySummary: string | null;
   clutter: ClutterFinding[];
   groups: ClutterSenderGroup[];
   priorities: PriorityFinding[];
@@ -42,6 +44,9 @@ interface PanelState {
   ingest: (msg: ExtMessage) => void;
   dismissMemorySuggestion: (id: string) => void;
   removeProposedAction: (id: string) => void;
+  /** Optimistically drop a decision (handled/snoozed); restore on undo. */
+  removeDecision: (id: string) => void;
+  restoreDecision: (decision: Decision) => void;
   setApiKey: (k: string) => void;
   setDryRun: (b: boolean) => void;
   setKillSwitch: (b: boolean) => void;
@@ -56,6 +61,7 @@ export const usePanelStore = create<PanelState>((set) => ({
   scanStatus: 'idle',
   scanProgress: { loaded: 0, target: 0 },
   decisions: [],
+  daySummary: null,
   clutter: [],
   groups: [],
   priorities: [],
@@ -78,6 +84,7 @@ export const usePanelStore = create<PanelState>((set) => ({
                 scanStatus: 'reading',
                 scanProgress: { loaded: 0, target: 0 },
                 decisions: [],
+                daySummary: null,
                 groups: [],
                 lastError: null,
               }
@@ -93,7 +100,7 @@ export const usePanelStore = create<PanelState>((set) => ({
         case 'bg/turn_done':
           return { scanStatus: msg.ok ? 'done' : 'error' };
         case 'bg/decisions':
-          return { decisions: msg.decisions };
+          return { decisions: msg.decisions, daySummary: msg.summary ?? null };
         case 'bg/classification':
           return {
             clutter: msg.clutter,
@@ -136,6 +143,14 @@ export const usePanelStore = create<PanelState>((set) => ({
       delete next[id];
       return { proposedActions: next };
     }),
+  removeDecision: (id) =>
+    set((s) => ({ decisions: s.decisions.filter((d) => d.id !== id) })),
+  restoreDecision: (decision) =>
+    set((s) =>
+      s.decisions.some((d) => d.id === decision.id)
+        ? {}
+        : { decisions: [...s.decisions, decision] }
+    ),
   setApiKey: (k) => set({ apiKey: k }),
   setDryRun: (b) => set({ dryRun: b }),
   setKillSwitch: (b) => set({ killSwitch: b }),

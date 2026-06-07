@@ -189,7 +189,7 @@ onMessage(async (msg, sender) => {
         return;
       }
       case 'content/dom_action_result': {
-        await appendLedger({
+        const updated = await appendLedger({
           proposedActionId: msg.proposedActionId,
           executed: {
             ok: msg.ok,
@@ -198,6 +198,7 @@ onMessage(async (msg, sender) => {
             after: msg.after,
           },
         });
+        if (updated) await broadcastToPanel({ kind: 'bg/ledger_entry', entry: updated });
         await recordTrace({
           kind: msg.ok ? 'action_executed' : 'error',
           message: msg.ok ? 'DOM action executed' : msg.error ?? 'DOM action failed',
@@ -248,8 +249,14 @@ onMessage(async (msg, sender) => {
         await runOrchestratorTurn({ trigger: 'approval', approval: msg.approval });
         return;
       }
+      case 'panel/execute_action': {
+        // Chat-approved action that isn't in the ledger yet: record → gate →
+        // execute → log, all inside the orchestrator turn.
+        await runOrchestratorTurn({ trigger: 'execute', action: msg.action });
+        return;
+      }
       case 'panel/reject_action': {
-        await appendLedger({
+        const updated = await appendLedger({
           proposedActionId: msg.proposedActionId,
           approval: {
             proposedActionId: msg.proposedActionId,
@@ -257,6 +264,7 @@ onMessage(async (msg, sender) => {
             approvedBy: 'user',
           },
         });
+        if (updated) await broadcastToPanel({ kind: 'bg/ledger_entry', entry: updated });
         return;
       }
       case 'panel/kill_switch': {
@@ -274,6 +282,22 @@ onMessage(async (msg, sender) => {
           ] as Record<string, unknown>[]) ?? [];
         existing.push(msg.preference);
         await chrome.storage.local.set({ [STORAGE_KEYS.preferences]: existing });
+        return;
+      }
+      case 'panel/decision_action': {
+        // Persist a per-decision disposition keyed by emailId so a re-scan
+        // honours it. 'restore' (undo) clears it. Keyed to match the
+        // orchestrator's DECISION_STATE_KEY filter.
+        const key = 'emailsignal_decision_state';
+        const state =
+          ((await chrome.storage.local.get(key))[key] as
+            | Record<string, { status: 'handled' | 'snoozed'; until?: number }>
+            | undefined) ?? {};
+        for (const emailId of msg.emailIds) {
+          if (msg.action === 'restore') delete state[emailId];
+          else state[emailId] = { status: msg.action === 'handled' ? 'handled' : 'snoozed', until: msg.untilMs };
+        }
+        await chrome.storage.local.set({ [key]: state });
         return;
       }
       case 'panel/batch_approve': {
@@ -303,7 +327,10 @@ onMessage(async (msg, sender) => {
           id: `${msg.kind}:${msg.patternKey}:${Date.now()}`,
           kind: kindKey as 'liked_newsletter' | 'ignored_sender',
           key: msg.patternKey,
-          value: msg.kind === 'panel/always_suggest' ? 'always_suggest' : 'never_suggest',
+          // The value MUST be the sender/pattern itself — the synthesis step
+          // matches ignored_sender preferences against decision senders. Storing
+          // the literal "never_suggest" here is what made muting a no-op.
+          value: msg.patternKey,
           source: 'agent_suggested_then_approved' as const,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),

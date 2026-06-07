@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { usePanelStore } from '../state/store';
 import { ApprovalActionCard } from '../cards/ApprovalActionCard';
 import { MemorySuggestionCard } from '../cards/MemorySuggestionCard';
@@ -89,6 +89,9 @@ function isBatchable(a: ProposedAction): boolean {
 
 export function DailyBriefTab(): JSX.Element {
   const decisions = usePanelStore((s) => s.decisions);
+  const daySummary = usePanelStore((s) => s.daySummary);
+  const removeDecision = usePanelStore((s) => s.removeDecision);
+  const restoreDecision = usePanelStore((s) => s.restoreDecision);
   const account = usePanelStore((s) => s.account);
   const scanStatus = usePanelStore((s) => s.scanStatus);
   const scanProgress = usePanelStore((s) => s.scanProgress);
@@ -101,6 +104,38 @@ export function DailyBriefTab(): JSX.Element {
   const removeProposedAction = usePanelStore((s) => s.removeProposedAction);
 
   const [batchOpen, setBatchOpen] = useState(false);
+  const [undo, setUndo] = useState<{ decision: Decision; label: string } | null>(null);
+
+  // Auto-dismiss the undo snackbar after a few seconds.
+  useEffect(() => {
+    if (!undo) return;
+    const t = window.setTimeout(() => setUndo(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [undo]);
+
+  const disposition = (decision: Decision, action: 'handled' | 'snooze') => {
+    send({
+      kind: 'panel/decision_action',
+      action,
+      decisionId: decision.id,
+      emailIds: decision.emailIds,
+      untilMs: action === 'snooze' ? Date.now() + 24 * 60 * 60 * 1000 : undefined,
+    });
+    removeDecision(decision.id);
+    setUndo({ decision, label: action === 'handled' ? 'Marked handled' : 'Snoozed for a day' });
+  };
+
+  const undoDisposition = () => {
+    if (!undo) return;
+    restoreDecision(undo.decision);
+    send({
+      kind: 'panel/decision_action',
+      action: 'restore',
+      decisionId: undo.decision.id,
+      emailIds: undo.decision.emailIds,
+    });
+    setUndo(null);
+  };
 
   const batchEligible = pending.filter(isBatchable);
   const scanning = scanStatus === 'reading' || scanStatus === 'thinking';
@@ -183,6 +218,17 @@ export function DailyBriefTab(): JSX.Element {
 
   return (
     <div>
+      {undo && (
+        <div className="undo-bar" role="status">
+          <span>{undo.label}</span>
+          <button className="ghost" onClick={undoDisposition}>Undo</button>
+        </div>
+      )}
+
+      {daySummary && decisions.length > 0 && (
+        <p className="day-summary">{daySummary}</p>
+      )}
+
       {batchOpen && (
         <BatchActionReviewPanel
           actions={pending}
@@ -309,6 +355,8 @@ export function DailyBriefTab(): JSX.Element {
               <DecisionCard
                 decision={decision}
                 onHighlight={(selector) => send({ kind: 'panel/highlight', selector })}
+                onHandled={() => disposition(decision, 'handled')}
+                onSnooze={() => disposition(decision, 'snooze')}
                 onCorrect={(text) =>
                   send({
                     kind: 'panel/correct_finding',

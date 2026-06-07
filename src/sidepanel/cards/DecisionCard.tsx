@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { Decision, DecisionTheme, DecisionUrgency } from '@schemas/index';
 import { CorrectThis } from './primitives';
 
@@ -6,6 +6,10 @@ interface Props {
   decision: Decision;
   /** Highlight the underlying email(s) in the Gmail tab. */
   onHighlight?: (selector: string) => void;
+  /** Mark this decision dealt with — it leaves Today and won't resurface. */
+  onHandled?: () => void;
+  /** Snooze this decision out of Today until later. */
+  onSnooze?: () => void;
   onCorrect?: (text: string) => void;
 }
 
@@ -33,12 +37,26 @@ const URGENCY_LABEL: Record<DecisionUrgency, string> = {
  * deliberately does NOT dump the email body — if the user wants the email, the
  * action takes them to it in Gmail.
  */
-export function DecisionCard({ decision, onHighlight, onCorrect }: Props): JSX.Element {
+export function DecisionCard({
+  decision,
+  onHighlight,
+  onHandled,
+  onSnooze,
+  onCorrect,
+}: Props): JSX.Element {
   const actionLabel = decision.suggestedAction?.label ?? 'Open in Gmail';
   const canOpen = !!decision.rowSelector && !!onHighlight;
+  const [leaving, setLeaving] = useState(false);
+
+  // Tactile slide-out before the decision is removed (matches ApprovalActionCard).
+  const dispatch = (cb?: () => void) => {
+    if (!cb) return;
+    setLeaving(true);
+    window.setTimeout(cb, 280);
+  };
 
   return (
-    <article className={`card decision t-${decision.theme}`}>
+    <article className={`card decision t-${decision.theme} ${leaving ? 'leaving' : ''}`}>
       <div className="decision-head">
         <span className="theme-chip">{THEME_LABEL[decision.theme]}</span>
         {decision.urgency !== 'normal' && decision.urgency !== 'low' && (
@@ -67,6 +85,16 @@ export function DecisionCard({ decision, onHighlight, onCorrect }: Props): JSX.E
         >
           {actionLabel}
         </button>
+        {onHandled && (
+          <button className="ghost" onClick={() => dispatch(onHandled)} title="I've dealt with this — remove it from Today">
+            Mark handled
+          </button>
+        )}
+        {onSnooze && (
+          <button className="ghost" onClick={() => dispatch(onSnooze)} title="Hide until tomorrow">
+            Snooze
+          </button>
+        )}
         {onCorrect && <CorrectThis onSubmit={onCorrect} label="Not for me" />}
       </div>
     </article>

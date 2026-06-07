@@ -364,13 +364,31 @@ button.icon.spinning svg { animation: spin 900ms linear infinite; }
   color: var(--text-faint);
   margin-top: 1px;
 }
-.pulse-chevron {
-  color: var(--text-faint);
-  font-size: 10px;
-  transition: transform 200ms var(--ease-out);
+/* Legible, labelled disclosure — replaces the near-invisible ▾ glyph. The whole
+   bar is still the click target (cursor + role=button); this pill just names
+   what a click reveals. */
+.pulse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
   position: relative; z-index: 1;
+  transition: background 180ms var(--ease-out), color 180ms var(--ease-out);
 }
-.pulse-chevron.open { transform: rotate(180deg); }
+.pulse:hover .pulse-toggle { background: var(--surface-3); color: var(--text); }
+.pulse-toggle svg { transition: transform 200ms var(--ease-out); }
+.pulse-toggle.open svg { transform: rotate(180deg); }
+
+/* Idle "alive" cue + receded chrome — the doc mandates the pulse decays when
+   nothing has happened for a while (calm, smaller), but it must never vanish. */
+.pulse.idle .pulse-core { animation: breathe 3.6s ease-in-out infinite; }
+.pulse.idle-compact { padding: 8px 14px; }
 
 .pulse-trace {
   margin: -4px 16px 10px;
@@ -378,8 +396,8 @@ button.icon.spinning svg { animation: spin 900ms linear infinite; }
   background: var(--surface);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  font-family: ui-monospace, SFMono-Regular, 'Menlo', monospace;
-  font-size: 11px;
+  font-family: inherit;
+  font-size: 12px;
   max-height: 220px;
   overflow: auto;
   animation: expand-down 260ms var(--ease-out);
@@ -1019,6 +1037,47 @@ code {
 .decision.t-security { --tint: var(--danger);   --tint-soft: var(--danger-soft); }
 .decision.t-admin    { --tint: var(--text-faint); --tint-soft: var(--surface-2); }
 .decision.t-other    { --tint: var(--text-faint); --tint-soft: var(--surface-2); }
+
+/* Keep the themed left bar on hover. `.card:hover` sets the `border-color`
+   shorthand (→ all four sides, including the left), which would otherwise wash
+   the colored accent to grey. Re-assert the tint and add a soft tinted glow so
+   hover reads as a highlight, not a colour loss. */
+.decision, .cleanup {
+  transition: border-color 180ms var(--ease-out), border-left-color 180ms var(--ease-out),
+    box-shadow 180ms var(--ease-out), transform 180ms var(--ease-out);
+}
+.decision:hover, .cleanup:hover {
+  border-left-color: var(--tint, var(--accent));
+  box-shadow: var(--shadow-card), -10px 0 20px -14px var(--tint, var(--accent));
+}
+
+/* "Here's your day" — one calm synthesized sentence atop Today. Not a card;
+   it orients before the stack. Plain language, the user's voice (set server-side). */
+.day-summary {
+  margin: 2px 16px 14px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  font-weight: 500;
+  animation: fade-swap 280ms var(--ease-out);
+}
+
+/* Undo affordance after a decision is handled/snoozed — reversibility made
+   visible, the design doc's "tactile decisions" + "can the user undo it?". */
+.undo-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 16px 10px;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  animation: spring-in 280ms var(--ease-spring);
+}
+.undo-bar button { color: var(--accent-strong); font-weight: 600; }
 
 .decision-head {
   display: flex;

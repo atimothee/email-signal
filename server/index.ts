@@ -17,7 +17,7 @@ import {
   EmailCandidateSchema,
   UserPreferenceSchema,
 } from '../src/schemas/index.js';
-import { runAgentClassification, runAgentChat, initServerWeave } from './agents.js';
+import { runAgentClassification, runAgentChat, initServerWeave, weaveDashboardUrl } from './agents.js';
 import { cacheStatus, initCache } from './cache.js';
 import type { SseWriter } from './trace-bridge.js';
 
@@ -46,6 +46,7 @@ app.get('/health', (c) =>
     hasOpenAIKey: !!process.env['OPENAI_API_KEY'],
     hasWeaveKey: !!process.env['WANDB_API_KEY'],
     weaveProject: process.env['WANDB_PROJECT'] ?? null,
+    weaveDashboardUrl: weaveDashboardUrl(),
     cache: cacheStatus(),
   })
 );
@@ -86,7 +87,7 @@ app.post('/orchestrate/classify', async (c) => {
     try {
       const result = await runAgentClassification({ turnId, candidates, writer, apiKey, account, preferences });
       await writer.send('classification', { clutter: result.clutter });
-      await writer.send('decisions', { decisions: result.decisions });
+      await writer.send('decisions', { decisions: result.decisions, summary: result.summary });
       await writer.send('done', { ok: true });
     } catch (err) {
       const message = (err as Error).message ?? 'unknown error';
