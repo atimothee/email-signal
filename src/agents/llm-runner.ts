@@ -5,6 +5,7 @@ import {
   DecisionSchema,
   EmailCandidate,
   AgentTraceEventSchema,
+  UserPreference,
 } from '@schemas/index';
 import { AGENT_NAMES } from './agent-defs';
 import { recordTrace } from '@/weave/tracing';
@@ -67,14 +68,21 @@ async function preflight(): Promise<string | undefined> {
 /** Classify + synthesize a full candidate set through the sidecar. */
 export async function classifyViaSidecar(
   turnId: string,
-  candidates: EmailCandidate[]
+  candidates: EmailCandidate[],
+  preferences?: UserPreference[]
 ): Promise<ClassifyResult> {
   const apiKey = await preflight();
   const account = await getAccountEmail();
   const clutter: ClutterFinding[] = [];
   const decisions: Decision[] = [];
 
-  for await (const ev of sseFetch('/orchestrate/classify', { turnId, candidates, apiKey, account })) {
+  for await (const ev of sseFetch('/orchestrate/classify', {
+    turnId,
+    candidates,
+    apiKey,
+    account,
+    preferences,
+  })) {
     if (ev.type === 'trace') {
       const parsed = AgentTraceEventSchema.safeParse(ev.data);
       if (parsed.success) await recordTrace(parsed.data);

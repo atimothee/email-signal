@@ -15,6 +15,7 @@ import {
   ClutterFindingSchema,
   DecisionSchema,
   EmailCandidateSchema,
+  UserPreferenceSchema,
 } from '../src/schemas/index.js';
 import { runAgentClassification, runAgentChat, initServerWeave } from './agents.js';
 import { cacheStatus, initCache } from './cache.js';
@@ -56,6 +57,8 @@ const ClassifyBody = z.object({
   apiKey: z.string().optional(),
   /** Signed-in mail address; namespaces the classify cache (hashed before use). */
   account: z.string().optional(),
+  /** Standing user preferences recalled client-side; merged into synthesis. */
+  preferences: z.array(UserPreferenceSchema).max(200).optional(),
 });
 
 // ---- Classify + synthesize (SSE) ----
@@ -72,7 +75,7 @@ app.post('/orchestrate/classify', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'invalid body', details: parsed.error.flatten() }, 400);
   }
-  const { turnId = nanoid(), candidates, apiKey, account } = parsed.data;
+  const { turnId = nanoid(), candidates, apiKey, account, preferences } = parsed.data;
 
   return streamSSE(c, async (stream) => {
     const writer: SseWriter = {
@@ -81,7 +84,7 @@ app.post('/orchestrate/classify', async (c) => {
       },
     };
     try {
-      const result = await runAgentClassification({ turnId, candidates, writer, apiKey, account });
+      const result = await runAgentClassification({ turnId, candidates, writer, apiKey, account, preferences });
       await writer.send('classification', { clutter: result.clutter });
       await writer.send('decisions', { decisions: result.decisions });
       await writer.send('done', { ok: true });

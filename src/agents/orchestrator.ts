@@ -152,7 +152,7 @@ async function handleScan(scan: ScanResult, ctx: AgentContext): Promise<void> {
       preferences: ctx.preferences,
     })
   );
-  const { decisions, clutter } = await classifyViaSidecar(ctx.turnId, scan.candidates);
+  const { decisions, clutter } = await classifyViaSidecar(ctx.turnId, scan.candidates, ctx.preferences);
   await recordTrace({
     kind: 'agent_end',
     agent: AGENT_NAMES.priority,
