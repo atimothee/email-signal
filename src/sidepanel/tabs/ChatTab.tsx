@@ -20,7 +20,7 @@ export function ChatTab(): JSX.Element {
         instructions={ORCHESTRATOR_INSTRUCTIONS}
         suggestions={SUGGESTIONS}
         labels={{
-          title: 'EmailSignal',
+          title: 'Email Signal',
           initial: "Ask about your inbox. I'll never act on it without showing you the action card first.",
           placeholder: 'Ask anything about your inbox…',
         }}

@@ -117,7 +117,7 @@ export function SettingsTab(): JSX.Element {
       <div className="settings-row">
         <div>
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div className="label">EmailSignal sidecar (required)</div>
+            <div className="label">Email Signal sidecar (required)</div>
             {statusPill}
           </div>
           <div className="hint">
@@ -153,7 +153,7 @@ export function SettingsTab(): JSX.Element {
           )}
           {serverStatus.state === 'down' && (
             <div className="subtle" style={{ color: 'var(--danger)', marginTop: 6 }}>
-              {serverStatus.error}. Run <code>npm run server</code> in the EmailSignal repo,
+              {serverStatus.error}. Run <code>npm run server</code> in the Email Signal repo,
               then click Recheck.
             </div>
           )}
@@ -274,7 +274,7 @@ export function SettingsTab(): JSX.Element {
       </div>
 
       <div className="subtle" style={{ marginTop: 14 }}>
-        EmailSignal V1 is read-mostly. We never delete or send mail. Approval cards always
+        Email Signal V1 is read-mostly. We never delete or send mail. Approval cards always
         precede DOM clicks. See README.md → Safety model.
       </div>
     </div>

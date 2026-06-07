@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "EmailSignal",
+  "name": "Email Signal",
   "version": "0.1.0",
   "description": "Multi-agent Gmail assistant with explicit human-in-the-loop approvals. Reads visible Gmail DOM. Never deletes or sends mail.",
   "minimum_chrome_version": "116",
   "action": {
-    "default_title": "EmailSignal",
+    "default_title": "Email Signal",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

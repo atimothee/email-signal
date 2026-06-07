@@ -130,7 +130,7 @@ function defaultEffect(action: ProposedAction): string {
     case 'archive':
       return 'Archives this out of the inbox. Undo from History.';
     case 'apply_label':
-      return `Adds the label "${action.params['labelName'] ?? 'EmailSignal'}".`;
+      return `Adds the label "${action.params['labelName'] ?? 'Email Signal'}".`;
     case 'suggest_label':
       return 'Suggests a label — nothing is applied until you pick.';
     case 'remember_preference':

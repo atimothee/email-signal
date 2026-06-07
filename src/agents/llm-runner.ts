@@ -37,7 +37,7 @@ async function preflight(): Promise<string | undefined> {
   const health = await isServerHealthy();
   if (!health.ok) {
     throw new SidecarError(
-      `Can't reach the EmailSignal sidecar (${health.error ?? 'offline'}). ` +
+      `Can't reach the Email Signal sidecar (${health.error ?? 'offline'}). ` +
         `Start it with "npm run server" in the repo, or set the URL in Settings.`
     );
   }

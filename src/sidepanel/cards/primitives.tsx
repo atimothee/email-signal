@@ -129,7 +129,7 @@ export function ReversibilityBadge({ reversible }: ReversibilityBadgeProps): JSX
     );
   }
   return (
-    <span className="pill critical" title="Once applied, this cannot be undone from EmailSignal.">
+    <span className="pill critical" title="Once applied, this cannot be undone from Email Signal.">
       not reversible
     </span>
   );

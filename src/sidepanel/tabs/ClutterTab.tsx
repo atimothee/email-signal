@@ -41,7 +41,7 @@ export function ClutterTab(): JSX.Element {
   if (groups.length === 0 && scanStatus === 'error') {
     return (
       <div>
-        <ErrorState message={lastError ?? 'The EmailSignal sidecar is unavailable.'} />
+        <ErrorState message={lastError ?? 'The Email Signal sidecar is unavailable.'} />
         <EmptyState
           title="Can't reach the sidecar"
           body="Cleanup needs the local Node sidecar running. Start it with “npm run server”, then scan again."
