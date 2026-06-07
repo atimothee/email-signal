@@ -1,4 +1,5 @@
-export const APP_NAME = 'EmailSignal';
+/** Front-facing product name (issue #12). Internal log prefixes stay [EmailSignal]. */
+export const APP_NAME = 'Email Signal';
 export const STORAGE_KEYS = {
   // NOTE: user preferences live in the memory store (es.mem.prefs, keyed by
   // userId) — see src/memory/json-store.ts. The old flat 'es.preferences.v1'

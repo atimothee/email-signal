@@ -1,21 +1,28 @@
 # Extension icons
 
-The icon **is the in-app "Ambient Pulse", miniaturized**: a single glowing
-cobalt accent dot with one soft ring, centered on a dark rounded-square tile.
-No envelope, no "@", no letter-mark — just the pulse that signals liveness
-throughout the app (see `design-guidelines.md`, "The Ambient Pulse").
+The icon **is the in-app "Ambient Pulse", miniaturized**: a single luminous
+pulse (bright core + one soft ring), centered on a **predominantly blue**
+rounded-square tile. No envelope, no "@", no letter-mark — just the pulse that
+signals liveness throughout the app (see `design-guidelines.md`, "The Ambient
+Pulse").
+
+The tile is a blue→deep-navy radial gradient — **no black** (issue #18: black
+read as the dominant color and made the mark feel heavy/inactive; it's been
+replaced with desaturated navy so the icon reads unmistakably blue at a glance
+and holds shape on both light and dark toolbars). The signal itself is a bright
+blue-white core so the pulse pops against the blue field.
 
 ## Design tokens (64×64 reference master)
 
 | Element        | Value                                   |
 | -------------- | --------------------------------------- |
-| Tile bg        | `#0a0e1a`                               |
+| Tile           | radial `#2f78de` → `#1b56b4` → `#0a2f6b` (blue, no black) |
 | Corner radius  | 14 (~22% of size)                       |
-| Dot            | `#4d9eff`, diameter ~22% (flat, no gradient) |
-| Glow           | radial blur ~6%, `rgba(77,158,255,0.20)` (accent-soft) |
-| Ring           | `#7ab6ff` (accent-strong) @ 60% opacity |
-| Ring stroke    | 1.5px                                   |
-| Ring diameter  | ~52% of size, centered on the dot       |
+| Core dot       | `#f2f7ff`, diameter ~22% (bright blue-white) |
+| Glow           | radial blur ~6%, `rgba(173,210,255,0.40)` |
+| Ring           | `#d4e6ff` @ 78% opacity                  |
+| Ring stroke    | 1.6px                                   |
+| Ring diameter  | ~52% of size, centered on the core      |
 
 ## Source of truth
 

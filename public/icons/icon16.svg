@@ -1,26 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  16x16-specific variant of icon.svg. At 16px the master's 1.5px ring scales
-  to <0.4px and muddies, so the ring is thickened (1px at this 16-grid) and
-  pulled slightly outward for clear separation from the dot. The dot + glow
-  read identically to the master. Master source of truth is icon.svg.
+  16x16-specific variant of icon.svg. At 16px the master's 1.6px ring scales
+  down and muddies, so the ring is thickened (1px on this 16-grid) and pulled
+  slightly outward for clear separation from the core. Blue-dominant palette
+  matches the master (issue #18). Master source of truth is icon.svg.
 -->
 <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <radialGradient id="tile16" cx="50%" cy="42%" r="72%">
+      <stop offset="0%" stop-color="#2f78de"/>
+      <stop offset="55%" stop-color="#1b56b4"/>
+      <stop offset="100%" stop-color="#0a2f6b"/>
+    </radialGradient>
     <filter id="glow" x="-100%" y="-100%" width="300%" height="300%" color-interpolation-filters="sRGB">
       <feGaussianBlur in="SourceGraphic" stdDeviation="1.0"/>
     </filter>
   </defs>
 
-  <!-- Tile (corner radius ~22% = 3.5) -->
-  <rect x="0" y="0" width="16" height="16" rx="3.5" ry="3.5" fill="#0a0e1a"/>
+  <!-- Tile: blue-dominant, no black (corner radius ~22% = 3.5) -->
+  <rect x="0" y="0" width="16" height="16" rx="3.5" ry="3.5" fill="url(#tile16)"/>
 
-  <!-- Soft glow halo (accent-soft), dot r ~1.75 (~22%) -->
-  <circle cx="8" cy="8" r="1.75" fill="rgba(77,158,255,0.20)" filter="url(#glow)"/>
+  <!-- Soft luminous halo, core r ~1.9 (~24%) -->
+  <circle cx="8" cy="8" r="1.9" fill="rgba(173,210,255,0.42)" filter="url(#glow)"/>
 
   <!-- One soft ring, thickened to 1px and r=4.4 so it reads at 16px -->
-  <circle cx="8" cy="8" r="4.4" fill="none" stroke="#7ab6ff" stroke-opacity="0.6" stroke-width="1"/>
+  <circle cx="8" cy="8" r="4.4" fill="none" stroke="#d4e6ff" stroke-opacity="0.8" stroke-width="1"/>
 
-  <!-- Glowing accent dot -->
-  <circle cx="8" cy="8" r="1.75" fill="#4d9eff"/>
+  <!-- The signal: bright blue-white core -->
+  <circle cx="8" cy="8" r="1.9" fill="#f2f7ff"/>
 </svg>
