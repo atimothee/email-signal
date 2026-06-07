@@ -1318,6 +1318,179 @@ button.primary.slim { color: #06121f; }
 }
 .conf-dot.on { opacity: 1; }
 
+/* ── First-run setup (issue #56) ─────────────────────
+   One scrollable screen. Lives outside `.app` so it owns its own padding +
+   scroll container and never inherits the panel chrome.
+   Reuses .pill / .input / .danger-banner / button.primary from above. */
+.setup-shell {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 16px 24px;
+  overflow: auto;
+  position: relative;
+  z-index: 1;
+}
+.setup-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 16px 16px;
+  box-shadow: var(--shadow-card);
+  animation: spring-in 380ms var(--ease-spring);
+}
+.setup-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, var(--text), var(--accent-strong));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.setup-sub {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.setup-section {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setup-section:last-of-type { border-bottom: none; }
+.setup-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.setup-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.setup-status .pill { font-weight: 500; }
+.setup-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.setup-recheck {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 11.5px;
+}
+.setup-status-meta {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.setup-status-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--danger);
+  line-height: 1.5;
+}
+.setup-link {
+  margin-top: 8px;
+  display: inline-flex;
+  background: transparent;
+  border: none;
+  color: var(--accent-strong);
+  font-size: 12px;
+  padding: 2px 0;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-soft);
+  text-underline-offset: 3px;
+}
+.setup-link:hover {
+  color: var(--accent);
+  background: transparent;
+  transform: none;
+  text-decoration-color: var(--accent);
+}
+.setup-disclosure {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setup-disclosure:last-of-type { border-bottom: none; }
+.setup-disclosure-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 8px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.setup-disclosure-trigger:hover {
+  color: var(--text);
+  background: transparent;
+  transform: none;
+}
+.setup-disclosure-chev {
+  color: var(--text-faint);
+  transition: transform 200ms var(--ease-out);
+}
+.setup-disclosure.open .setup-disclosure-trigger { color: var(--text); }
+.setup-disclosure.open .setup-disclosure-chev { transform: rotate(-180deg); color: var(--accent-strong); }
+.setup-disclosure-body {
+  padding: 4px 2px 10px;
+  animation: fade-swap 220ms var(--ease-out);
+}
+.setup-cta {
+  margin-top: 18px;
+}
+.setup-primary {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 14px;
+}
+.setup-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.setup-cta-hint {
+  margin-top: 8px;
+  text-align: center;
+}
+.setup-section a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-soft);
+  text-underline-offset: 2px;
+}
+.setup-section a:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+/* "Re-run setup" inline link in SettingsTab. Visually identical to .setup-link
+   so the affordance reads the same wherever it appears. */
+.settings-rerun-link {
+  background: transparent;
+  border: none;
+  color: var(--accent-strong);
+  padding: 0;
+  font-size: 12px;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-soft);
+  text-underline-offset: 3px;
+}
+.settings-rerun-link:hover {
+  color: var(--accent);
+  background: transparent;
+  transform: none;
+  text-decoration-color: var(--accent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
