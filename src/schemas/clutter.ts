@@ -50,13 +50,22 @@ export const ClutterSenderGroupSchema = z.object({
   suggestedActions: z.array(ClutterSuggestedActionSchema),
   emailIds: z.array(z.string()),
   /**
-   * Per-email Gmail row selectors for this sender's messages, resolved from the
-   * scan candidates. Lets the panel build gate-valid mark_read actions (e.g.
-   * Mute → clear the sender's noise) without re-extracting the DOM. Only emails
-   * whose selector was captured appear here, so it may be shorter than emailIds.
+   * Per-email Gmail locators for this sender's messages, resolved from the scan
+   * candidates. Lets the panel build gate-valid mark_read actions (e.g. Mute →
+   * clear the sender's noise) without re-extracting the DOM. `messageId` (Gmail's
+   * stable data-legacy-message-id) is preferred at execute time because the
+   * positional `rowSelector` was resolved in the disposable scan tab and rarely
+   * re-resolves in the user's real tab (#72). Only emails whose locator was
+   * captured appear here, so it may be shorter than emailIds.
    */
   rowAnchors: z
-    .array(z.object({ emailId: z.string(), rowSelector: z.string() }))
+    .array(
+      z.object({
+        emailId: z.string(),
+        rowSelector: z.string(),
+        messageId: z.string().optional(),
+      })
+    )
     .default([]),
 });
 export type ClutterSenderGroup = z.infer<typeof ClutterSenderGroupSchema>;

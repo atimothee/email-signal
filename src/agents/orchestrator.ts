@@ -29,6 +29,7 @@ import {
   PolicyDecisionSchema,
 } from './types';
 import { classifyViaSidecar, chatViaSidecar } from './llm-runner';
+import { filterDecisionsByPreferences, filterClutterByPreferences } from './preference-filter';
 import { log } from '@/common/log';
 import { STORAGE_KEYS } from '@/common/constants';
 import { ALL_PROVIDER_MATCH_PATTERNS } from '@/providers/url-patterns';
@@ -176,14 +177,21 @@ async function handleScan(scan: ScanResult, ctx: AgentContext): Promise<void> {
 
   // 3) Apply preference filters (ignored_sender) + user dispositions
   //    (decisions the user marked handled, or snoozed until later).
-  const prefFiltered = filterDecisionsByPreferences(decisions, ctx);
+  const prefFiltered = filterDecisionsByPreferences(decisions, ctx.preferences);
   const filtered = await filterDispositionedDecisions(prefFiltered);
 
-  const groups = groupClutter(clutter, scan.candidates);
+  // Muted senders must drop out of the Cleanup tab too, not just the priority
+  // list. The sidecar prompt asks the model to honour ignored_sender, but it
+  // routinely ignores that for clutter classification — so we filter clutter
+  // DETERMINISTICALLY here before grouping/broadcast (#72, Defect C). Grouping
+  // from already-filtered findings keeps muted senders out of groups and out of
+  // the step-4 unsubscribe proposals below.
+  const clutterFiltered = filterClutterByPreferences(clutter, ctx.preferences);
+  const groups = groupClutter(clutterFiltered, scan.candidates);
   await broadcast({ kind: 'bg/decisions', decisions: filtered, summary });
   await broadcast({
     kind: 'bg/classification',
-    clutter,
+    clutter: clutterFiltered,
     groups,
     priorities: [],
   });
@@ -454,17 +462,8 @@ async function filterDispositionedDecisions(decisions: Decision[]): Promise<Deci
   return decisions.filter((d) => d.emailIds.length === 0 || !d.emailIds.every(suppressed));
 }
 
-function filterDecisionsByPreferences(decisions: Decision[], ctx: AgentContext): Decision[] {
-  const ignored = new Set(
-    ctx.preferences
-      .filter((p) => p.kind === 'ignored_sender' && typeof p.value === 'string')
-      .map((p) => (p.value as string).toLowerCase())
-  );
-  if (ignored.size === 0) return decisions;
-  return decisions.filter(
-    (d) => !d.senders.some((s) => ignored.has(s.toLowerCase()))
-  );
-}
+// ignored_sender (Mute) filtering lives in ./preference-filter so it can be
+// unit-tested without the orchestrator's chrome/runtime graph (#72).
 
 // ---------------- Policy + propose ----------------
 
@@ -625,7 +624,12 @@ async function runActionExecutor(
     }
   }
   if (NEEDS_SELECTOR.has(action.type)) {
-    const sel = (action.params['rowSelector'] ?? action.params['selector']) as string | undefined;
+    // A stable messageId counts as a locator — the content script resolves the
+    // row by identity at execute time, even when the positional selector is
+    // stale in the user's real tab (#72).
+    const sel = (action.params['rowSelector'] ??
+      action.params['selector'] ??
+      action.params['messageId']) as string | undefined;
     if (typeof sel !== 'string' || !sel) {
       return {
         ok: false,
@@ -892,10 +896,17 @@ function groupClutter(findings: ClutterFinding[], scan: EmailCandidate[]): Clutt
         emailIds: list.map((f) => f.emailId),
         rowAnchors: list
           .map((f) => {
-            const sel = scan.find((c) => c.id === f.emailId)?.domAnchor?.rowSelector;
-            return sel ? { emailId: f.emailId, rowSelector: sel } : null;
+            const anchor = scan.find((c) => c.id === f.emailId)?.domAnchor;
+            if (!anchor?.rowSelector) return null;
+            return {
+              emailId: f.emailId,
+              rowSelector: anchor.rowSelector,
+              ...(anchor.messageId ? { messageId: anchor.messageId } : {}),
+            };
           })
-          .filter((a): a is { emailId: string; rowSelector: string } => a !== null),
+          .filter(
+            (a): a is { emailId: string; rowSelector: string; messageId?: string } => a !== null
+          ),
       })
     );
   }

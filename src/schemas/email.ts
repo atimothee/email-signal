@@ -55,6 +55,11 @@ export const EmailCandidateSchema = z.object({
     .object({
       rowSelector: z.string().optional(),
       threadSelector: z.string().optional(),
+      // Gmail's stable per-message id (data-legacy-message-id). Unlike the
+      // positional rowSelector — which was resolved in the disposable scan tab
+      // and rarely re-resolves in the user's real tab — this lets the content
+      // script find the row by identity in whatever view is showing (#72).
+      messageId: z.string().optional(),
     })
     .default({}),
 });

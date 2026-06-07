@@ -140,7 +140,15 @@ export function normalizeProposedAction(raw: LooseAction, decisions: Decision[] 
 /** True when this action can't execute yet because we couldn't locate its row. */
 export function isMissingTarget(action: ProposedAction): boolean {
   const meta = ACTION_META[action.type];
-  if (meta.needsRowSelector && !action.params['rowSelector'] && !action.params['selector']) return true;
+  if (
+    meta.needsRowSelector &&
+    !action.params['rowSelector'] &&
+    !action.params['selector'] &&
+    // A stable messageId is a valid locator on its own — the content script
+    // resolves the row by identity (data-legacy-message-id) at execute time (#72).
+    !action.params['messageId']
+  )
+    return true;
   if (action.type === 'click_unsubscribe') {
     const href = action.params['unsubscribeHref'];
     return typeof href !== 'string' || !/^https:\/\//.test(href);
