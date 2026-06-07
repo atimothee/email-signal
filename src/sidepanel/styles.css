@@ -1020,6 +1020,19 @@ code {
 .decision.t-admin    { --tint: var(--text-faint); --tint-soft: var(--surface-2); }
 .decision.t-other    { --tint: var(--text-faint); --tint-soft: var(--surface-2); }
 
+/* Keep the themed left bar on hover. `.card:hover` sets the `border-color`
+   shorthand (→ all four sides, including the left), which would otherwise wash
+   the colored accent to grey. Re-assert the tint and add a soft tinted glow so
+   hover reads as a highlight, not a colour loss. */
+.decision, .cleanup {
+  transition: border-color 180ms var(--ease-out), border-left-color 180ms var(--ease-out),
+    box-shadow 180ms var(--ease-out), transform 180ms var(--ease-out);
+}
+.decision:hover, .cleanup:hover {
+  border-left-color: var(--tint, var(--accent));
+  box-shadow: var(--shadow-card), -10px 0 20px -14px var(--tint, var(--accent));
+}
+
 .decision-head {
   display: flex;
   align-items: center;

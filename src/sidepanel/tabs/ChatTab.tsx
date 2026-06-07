@@ -5,8 +5,8 @@ import { useGenerativeUiBindings } from '../copilot/actions';
 import { ORCHESTRATOR_INSTRUCTIONS } from '../copilot/Provider';
 
 const SUGGESTIONS = [
-  { title: 'My priorities today?', message: 'What are my priorities today?' },
-  { title: 'Unsubscribe ideas', message: 'What can I unsubscribe from?' },
+  { title: "Today's priorities", message: 'What are my priorities today?' },
+  { title: 'What can I unsubscribe from?', message: 'Which senders should I unsubscribe from?' },
   { title: 'Replies needed', message: 'Which emails do I need to reply to?' },
   { title: 'Payment reminders', message: 'Show me payment reminders.' },
   { title: 'Recap', message: 'What did you do today?' },
